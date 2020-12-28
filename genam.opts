@@ -1,0 +1,6 @@
+incdir include:
+header Devpac:system.gs
+-vp=68020
+-vow-,o+,o3-,ow7+
+alink
+bdw

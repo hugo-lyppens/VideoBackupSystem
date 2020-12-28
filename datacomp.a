@@ -1,0 +1,348 @@
+	OPT		o+,ow-
+	INCDIR	"INCLUDE:"
+	INCLUDE	"exec/types.i"
+	INCLUDE	"exec/libraries.i"
+	INCLUDE	"exec/funcdef.i"
+	INCLUDE	"exec/memory.i"
+	INCLUDE	"exec/exec_lib.i"
+
+	INCLUDE	"tvsystem.i"
+	
+	
+ORIGBLKMAXSIZE	equ	(16*18)
+BLKMAXSIZE	equ	(2+16*2)			
+
+	STRUCTURE VARIABLES,0
+		APTR		fromend
+		APTR		fromlimit
+		APTR		toend
+		APTR		tolimit
+		WORD		dummy
+	LABEL		VARIABLES_SIZEOF
+
+			
+
+
+
+
+		xdef	_DCG_Compress,_DCG_Uncompress,_DCG_CopyMemLong
+
+		section text,code
+
+dc_from		equ	4+4*(6+5)
+dc_fromlen	equ	8+4*(6+5)
+dc_newfromptr	equ	12+4*(6+5)
+dc_to		equ	16+4*(6+5)
+dc_tolen	equ	20+4*(6+5)
+dc_newtoptr	equ	24+4*(6+5)
+dc_hashtab	equ	28+4*(6+5)
+
+_DCG_Compress:
+	movem.l	d2-d7/a2-a6,-(sp)
+	lea	vars(pc),a6
+	move.l	dc_from(sp),a0
+	move.l	dc_fromlen(sp),d0
+	move.l	dc_to(sp),a1
+	move.l	dc_tolen(sp),d1
+	move.l	dc_hashtab(sp),a4
+		
+	move.l	a4,a2
+	move.w	#4096-1,d2
+	moveq	#0,d3
+1$	move.l	d3,(a2)+
+	dbra	d2,1$	
+	
+	lea	0(a0,d0.l),a2
+	move.l	a2,fromend(a6)
+	sub.w	#ORIGBLKMAXSIZE,a2
+	move.l	a2,fromlimit(a6)
+
+	cmp.l	#8,d1
+	blo	finishup	
+	lea	0(a1,d1.l),a3
+	move.l	a3,toend(a6)
+	sub.w	#2+2*16+2+4,a3
+	move.l	a3,tolimit(a6)
+
+	addq.l	#4,a1		;skip dest long word
+
+	moveq	#0,d4		;counts #blocks
+	lea	dummy(a6),a5
+	move.b	(a0)+,d0
+	move.b	(a0)+,d1
+	moveq	#0,d2
+nextgrp:
+	move.w	d6,(a5)
+	move.l	a1,a5
+	addq.l	#2,a1
+	cmp.l	fromlimit(a6),a0
+	bgt	nearend
+	cmp.l	tolimit(a6),a1
+	bgt	nearend
+		
+	addq.l	#1,d4		;#B+=1
+	move.l	#$FFFF8000,d6
+	bra.s	nextb
+literal:	
+	move.b	d0,(a1)+
+	move.b	d1,d0
+	move.b	d2,d1
+	lsr.w	#1,d6
+	bcs.s	nextgrp
+nextb:	
+	move.b	(a0)+,d2
+	
+	move.w	d2,d3	;d2.[8-15] is schoon
+	rol.b	#3,d3
+	eor.b	d1,d3
+	lsl.w	#4,d3
+	eor.b	d0,d3
+	move.l	0(a4,d3.w*4),a2
+	move.l	a0,0(a4,d3.w*4)
+	move.l	a0,d3
+	sub.l	a2,d3
+	cmp.l	#4096,d3
+	bhs.s	literal
+	subq.l	#3,a2
+	cmp.b	(a2)+,d0
+	bne.s	literal
+	cmp.b	(a2)+,d1
+	bne.s	literal
+	cmp.b	(a2)+,d2
+	bne.s	literal
+	moveq	#14,d7
+1$	
+	cmpm.b	(a0)+,(a2)+
+	dbne	d7,1$
+	beq.s	special
+	lsl.w	#4,d3
+	or.w	#14,d3
+	sub.w	d7,d3
+	move.w	d3,(a1)+
+	move.b	-1(a0),d0
+	move.b	(a0)+,d1
+	lsr.l	#1,d6
+	bcc.s	nextb
+	bcs	nextgrp
+	
+special:
+	lsl.w	#4,d3
+	or.w	#15,d3
+	move.w	d3,(a1)+
+	move.b	(a0)+,d0
+	move.b	(a0)+,d1
+	lsr.l	#1,d6
+	bcc.s	nextb
+	bcs	nextgrp
+	
+nearend:
+	move.l	dc_from(sp),a2
+	move.l	dc_to(sp),a3
+	tst.l	d4
+	beq.s	copyall
+	neg.l	d4
+	move.l	d4,(a3)
+	subq.l	#2,a0
+	move.l	fromend(a6),d2
+	sub.l	a0,d2
+	move.l	toend(a6),d3
+	sub.l	a1,d3
+	subq.l	#4,d3
+	cmp.l	d2,d3
+	bhi.s	d3gtd2
+	move.l	d3,d2
+d3gtd2:	
+	move.w	d2,(a5)
+	beq.s	skipstaartcopy
+	subq.w	#1,d2
+2$	move.b	(a0)+,(a1)+
+	dbra	d2,2$
+skipstaartcopy:	
+	clr.l	(a1)
+	move.l	a0,d2
+	sub.l	a2,d2
+	addq.l	#4,d2
+	move.l	a1,d3
+	sub.l	a3,d3
+	moveq	#0,d0		;echt gecomprimeerd!
+	cmp.l	d2,d3
+	blo.s	finishup
+copyall:	
+	move.l	dc_fromlen(sp),d2
+	move.l	dc_tolen(sp),d3
+	subq.l	#8,d3
+	cmp.l	d2,d3
+	bhi.s	4$
+	move.l	d3,d2
+4$	move.l	d2,(a3)+
+	move.l	d2,d0
+	move.l	a2,a0
+	move.l	a3,a1
+	bsr	memcpy
+*Postconditie: a0 wijst achter src, a1 wijst achter dest	
+	clr.l	(a1)
+	moveq	#-1,d0	;gekopieerd ipv gec
+finishup:
+	move.l	dc_newfromptr(sp),d1
+	beq.s	1$
+	move.l	d1,a2
+	move.l	a0,(a2)
+1$	move.l	dc_newtoptr(sp),d1
+	beq.s	2$
+	move.l	d1,a2
+	move.l	a1,(a2)
+2$
+	movem.l	(sp)+,d2-d7/a2-a6
+	moveq	#0,d0
+	rts
+	
+	
+uc_from		equ	4+4*(6+5)
+uc_newfromptr	equ	8+4*(6+5)
+uc_to		equ	12+4*(6+5)
+uc_newtoptr	equ	16+4*(6+5)
+
+_DCG_Uncompress:
+	movem.l	d2-d7/a2-a6,-(sp)
+	lea	vars(pc),a6
+	move.l	uc_from(sp),a0
+	move.l	uc_to(sp),a1
+	move.l	(a0)+,d0
+	bmi.s	echtgecomp
+	bsr	memcpy
+	moveq	#-1,d0
+	bra	dklaar
+alllit:	move.l	(a0)+,(a1)+
+	move.l	(a0)+,(a1)+	
+	move.l	(a0)+,(a1)+	
+	move.l	(a0)+,(a1)+
+	dbra	d7,dnextgrp
+	bra	staartje
+echtgecomp:
+	neg.l	d0
+	move.l	d0,d7
+	subq.l	#1,d7
+dnextgrp:	
+	move.w	(a0)+,d6
+	beq.s	alllit
+	moveq	#3,d5	unrolled 4 times
+kaas:
+	lsr.w	#1,d6
+	bcs.s	copyitem1
+	move.b	(a0)+,(a1)+
+	lsr.w	#1,d6
+	bcs.s	copyitem2
+l2:	move.b	(a0)+,(a1)+
+	lsr.w	#1,d6
+	bcs.s	copyitem3
+l3:	move.b	(a0)+,(a1)+
+	lsr.w	#1,d6
+	bcs.s	copyitem4
+l4:	move.b	(a0)+,(a1)+
+	dbra	d5,kaas		
+	dbra	d7,dnextgrp
+	bra.s	staartje		
+copyitem1:
+	move.w	(a0)+,d0
+	moveq	#15,d1
+	and.w	d0,d1
+	lsr.w	#4,d0
+	move.l	a1,a2
+	sub.w	d0,a2
+	move.b	(a2)+,(a1)+
+	move.b	(a2)+,(a1)+
+1$	move.b	(a2)+,(a1)+
+	dbra	d1,1$
+	lsr.w	#1,d6
+	bcc.s	l2
+
+copyitem2:
+	move.w	(a0)+,d0
+	moveq	#15,d1
+	and.w	d0,d1
+	lsr.w	#4,d0
+	move.l	a1,a2
+	sub.w	d0,a2
+	move.b	(a2)+,(a1)+
+	move.b	(a2)+,(a1)+
+1$	move.b	(a2)+,(a1)+
+	dbra	d1,1$
+	lsr.w	#1,d6
+	bcc.s	l3
+
+copyitem3:
+	move.w	(a0)+,d0
+	moveq	#15,d1
+	and.w	d0,d1
+	lsr.w	#4,d0
+	move.l	a1,a2
+	sub.w	d0,a2
+	move.b	(a2)+,(a1)+
+	move.b	(a2)+,(a1)+
+1$	move.b	(a2)+,(a1)+
+	dbra	d1,1$
+	lsr.w	#1,d6
+	bcc.s	l4
+
+
+copyitem4:
+	move.w	(a0)+,d0
+	moveq	#15,d1
+	and.w	d0,d1
+	lsr.w	#4,d0
+	move.l	a1,a2
+	sub.w	d0,a2
+	move.b	(a2)+,(a1)+
+	move.b	(a2)+,(a1)+
+1$	move.b	(a2)+,(a1)+
+	dbra	d1,1$
+	dbra	d5,kaas
+	dbra	d7,dnextgrp
+staartje:
+	move.w	(a0)+,d7
+	beq.s	dklaar
+	subq.w	#1,d7
+2$	move.b	(a0)+,(a1)+
+	dbra	d7,2$
+	moveq	#0,d0
+dklaar:	
+	move.l	uc_newfromptr(sp),d1
+	beq.s	1$
+	move.l	d1,a2
+	move.l	a0,(a2)
+1$	move.l	uc_newtoptr(sp),d1
+	beq.s	2$
+	move.l	d1,a2
+	move.l	a1,(a2)
+2$
+
+	movem.l	(sp)+,d2-d7/a2-a6
+	rts
+	
+_DCG_CopyMemLong:
+	move.l	4(sp),a0
+	move.l	8(sp),a1
+	move.l	12(sp),d0
+memcpy:	
+	moveq	#3,d1
+	and.w	d0,d1
+	lsr.l	#2,d0
+	subq.w	#1,d0
+	bcs.s	next64kl
+nextlw:	move.l	(a0)+,(a1)+
+	dbra	d0,nextlw
+next64kl:	
+	sub.l	#$10000,d0
+	bcc.s	nextlw
+	subq.w	#1,d1
+	bcs.s	finishcopy
+6$	move.b	(a0)+,(a1)+
+	dbra	d1,6$
+finishcopy:
+	rts
+
+	cnop	0,4
+vars	ds.b	VARIABLES_SIZEOF
+
+	end
+		

@@ -1,0 +1,58 @@
+if eq($(a),)
+	fout:	
+endif
+
+if eq($(a),gb)
+	OBJDEST  	= e_p_o
+	VIDEO	 	= PAL
+	LANG	 	= ENGLISH
+	EXECUTABLE 	= QApal
+endif
+
+if eq($(a),usa)
+	OBJDEST  	= e_n_o
+	VIDEO	 	= NTSC
+	LANG	 	= ENGLISH
+	EXECUTABLE 	= QAntsc
+endif
+
+
+CSRCS	    	= QA.c
+
+COBJS   	= $(patsubst %.c,$(OBJDEST)/%.o,$(CSRCS))
+EXTRAOBJS	= $(OBJDEST)/videointerface.o $(OBJDEST)/writeclist0.o \
+                  $(OBJDEST)/writeclist1.o
+
+#ASMSRCS		= 
+#
+#ASMOBJS		= $(patsubst %.a,$(OBJDEST)/%.o,$(ASMSRCS))
+
+#EXECUTABLE 	= $(EXECDEST)/QA
+
+
+all: setcflags $(EXECUTABLE)
+
+$(OBJDEST)/%.o: %.c
+	LC1 $(C1FLAGS) -oRAM:     -hinclude:sys.q $<
+	LC2 $(C2FLAGS) -o$(OBJDEST)/             RAM:$<
+
+
+
+$(OBJDEST)/%.o: %.a
+	GenIm2 -l -o$@ $<
+
+
+  
+setcflags:
+	C1FLAGS		= -d$(VIDEO) -d$(LANG) -r -b -cwf
+	C2FLAGS		= -v -y
+	echo >tvsystem.i "$(VIDEO) equ 1"	
+
+
+$(EXECUTABLE): $(COBJS) $(EXTRAOBJS)
+	blink  \
+	FROM LIB:tc.o $(COBJS) $(EXTRAOBJS) \
+	LIB LIB:lc.lib,LIB:amiga.lib ND SC SD VERBOSE FANCY TO $*
+
+
+	

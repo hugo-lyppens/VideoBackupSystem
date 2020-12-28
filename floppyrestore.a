@@ -1,0 +1,360 @@
+*floppyrestore.s
+			INCLUDE	"video.i"
+			INCLUDE	"vbserror.i"
+
+
+
+			xref		vars,disable_initser,enable,initfloppy,cleanupfloppy
+			xref		motor,gototrack,gotonexttrack,stepdelay
+			xref		coppershort,copperlong
+
+			xdef		_VFG_RestoreFloppy,testfloppy
+	
+*BOOL
+_VFG_RestoreFloppy:
+drivenr	equ		4
+
+			move.l	drivenr(sp),d0
+			movem.l	D1-D7/A0-A6,-(SP)
+			lea.l		vars(PC),a6			
+			lea.l		$DFF000,A5
+			
+			move.w	d0,d2
+			bsr		disable_initser
+			
+*			move.w	#DMAF_RASTER|DMAF_COPPER,dmacon(a5)
+			bsr		coppershort
+
+			bsr		initfloppy
+
+			bsr		testfloppy
+			move.l	d0,d6
+			bne		quit
+			
+			st.b		d2
+			bsr		motor
+			move.w	#0,D2
+			bsr		gototrack
+			
+*			move.w	#$670,color(a5)
+
+			movea.l	trackbuffers+TB_bufadr(a6),a2
+			movea.l	trackbuffers+TB_SIZEOF*1+TB_bufadr(a6),a3
+
+			move.w	#NUMTRACKS-1,d7
+			moveq		#0,d6				;return value
+
+			
+			move.w	#INTF_DSKBLK,intreq(a5)
+.trackloop:
+			lea		GAPSIZE(a2),a0
+			bsr		readtrackfromvideo
+			moveq.l	#EVIDEOREAD,d6
+			tst.w		d0
+			bne.s		.error
+			moveq.l	#EBREAK,d6
+			btst		#6,$bfe001
+			beq.s		.error
+
+			bsr		testfloppy
+			move.l	d0,d6
+			bne		quit
+
+			movea.l	a2,a0
+			bsr		startwrite
+			exg.l		a2,a3
+			dbra		d7,.trackloop	
+			
+			bsr		waitwrite
+			bsr		stepdelay
+			bsr		stepdelay
+			bsr		stepdelay
+			bsr		stepdelay
+			move.l	#EOK,d6
+			bra.s		.allok
+.error:
+			move.w	#$F00,color(a5)
+			
+.allok:
+			sf.b		d2
+			bsr		motor
+quit:
+			bsr		cleanupfloppy
+
+			bsr		copperlong
+*			move.w	#DMAF_SETCLR|DMAF_RASTER|DMAF_COPPER,dmacon(a5)
+			
+			bsr		enable
+
+			move.l	d6,d0
+			movem.l	(sp)+,D1-D7/A0-A6
+			rts
+			
+testfloppy:				;test whether disk in drive and write-unprotected
+			move.b		ciaa+ciapra,d1
+			moveq.l		#ENODISKINDRIVE,d0
+			
+			btst			#CIAB_DSKCHANGE,d1
+			beq.s			.quit
+
+			moveq.l		#EWRITEPROTECTED,d0
+			
+			btst			#CIAB_DSKPROT,d1
+			beq.s			.quit
+			moveq.l		#EOK,d0
+.quit:	
+			rts
+			
+			
+
+readtrackfromvideo:
+* a0.l: ptr to trackbuffer to store incoming data
+
+* retour d0.w error
+			movem.l	d2-d7/a2-a4,-(sp)
+			
+			movea.l	blocksok(a6),a1
+			moveq		#BLOCKSPERTRACK-1,d6
+			moveq		#-1,d0
+			movea.l	a0,a2
+.fillzero:
+			clr.b		(a1)+
+			move.w	d0,(a2)
+			lea		BYTESPERBLOCK*2(a2),a2
+			dbra		d6,.fillzero
+			move.b	#BLOCKSPERTRACK,nblocksnok(a6)
+			lea.l		serdatr(a5),a4
+			lea.l		crctab8times2(pc),a2
+			lea.l		andtab(PC),a3
+			move.w	#$1FE,d7
+			move.w	#INTF_RBF,d3
+			move.w	#$FFFF,breakval(a6)		impossible value
+			clr.w		delaycounter(a6)
+			bra.s		.hs0
+
+.hebikal:
+			tst.w		delaycounter(a6)
+			beq.s		.nix
+			subq.w	#1,delaycounter(a6)
+			bne.s		.nix
+			move.l	a0,-(sp)
+			bsr		gotonexttrack
+			move.l	(sp)+,a0
+			
+.nix:
+			moveq		#INTF_DSKBLK,d0
+			and.w		intreqr(a5),d0
+			beq.s		.hs0
+			move.w	d0,intreq(a5)
+			move.w	#0,dsklen(a5)
+			move.w	#15,delaycounter(a6)
+			
+			bra.s		.hs0
+
+
+						
+.valuefound:
+			moveq		#10-1,d2
+.readb:
+			move.w	(a4),d1
+			add.w		d1,d1
+			bpl.s		.readb
+			move.w	d3,intreq(a5)
+			and.w		#$1FF*2,d1
+			cmp.w		d0,d1
+			bne.s		.hs0
+			dbra		d2,.readb			
+			bra		.tracknowread
+.hs0:
+			move.w	(a4),d0
+			add.w		d0,d0
+			bpl.s		.hs0
+			move.w	d3,intreq(a5)
+			and.w		#$1FF*2,d0
+			
+			cmp.w		breakval(a6),d0
+			beq.s		.valuefound			
+			cmp.w		#HEADERSYNC0*2,d0
+			bne.s		.hs0
+
+.checksum:
+			move.w	(a4),d5
+			add.w		d5,d5
+			bpl.s		.checksum
+			move.w	d3,intreq(a5)
+			and.w		d7,d5				;checksum*2
+			move.w	d5,d1
+			swap		d1
+.skipbyte:
+			move.w	(a4),d0
+			add.w		d0,d0
+			bpl.s		.skipbyte
+			move.w	d3,intreq(a5)
+			move.w	#TRACKSYNC*2,breakval(a6)
+.blocknr:
+			move.w	(a4),d0
+			add.w		d0,d0
+			bpl.s		.blocknr
+			move.w	d3,intreq(a5)
+			and.w		d7,d0				;checksum*2
+
+			sub.w		d0,d5
+			move.w	d0,d2
+			lsr.w		#1,d2
+		
+			cmp.w		#BLOCKSPERTRACK,d2
+			bhs.s		.hs0
+			move.l	blocksok(a6),a1
+			tst.b		0(a1,d2.w)
+			bne		.hebikal
+			
+.thisonenotyet
+			asl.w		#6,d0
+			lea.l		(a0,d0.w),a1
+			
+			moveq		#(BYTESPERBLOCK/4)-1,d6
+			move.w	(a1),d1
+			move.w	d1,d4
+.readbyte0:
+			move.w	(a4),d0
+			add.w		d0,d0
+			bpl.s		.readbyte0
+			move.w	d3,intreq(a5)
+			and.w		d7,d0
+			sub.w		d0,d5
+			
+			and.w		.encodetab(pc,d0.w),d1
+			move.w	d1,(a1)+		
+			move.w	(a3,d0.w),d1
+.readbyte1:
+			move.w	(a4),d0
+			add.w		d0,d0
+			bpl.s		.readbyte1
+			move.w	d3,intreq(a5)
+			and.w		d7,d0
+			
+			sub.w		d0,d5
+
+			and.w		.encodetab(pc,d0.w),d1
+			move.w	d1,(a1)+		
+			move.w	(a3,d0.w),d1
+
+.readbyte2:
+			move.w	(a4),d0
+			add.w		d0,d0
+			bpl.s		.readbyte2
+			move.w	d3,intreq(a5)
+			and.w		d7,d0
+			
+			sub.w		d0,d5
+*			eor.w		d0,d5
+*			move.w	(a2,d5.w),d5
+
+			and.w		.encodetab(pc,d0.w),d1
+			move.w	d1,(a1)+		
+			move.w	(a3,d0.w),d1
+
+.readbyte3:
+			move.w	(a4),d0
+			add.w		d0,d0
+			bpl.s		.readbyte3
+			move.w	d3,intreq(a5)
+			and.w		d7,d0
+
+			sub.w		d0,d5
+*			eor.w		d0,d5
+*			move.w	(a2,d5.w),d5
+
+			and.w		.encodetab(pc,d0.w),d1
+			move.w	d1,(a1)+		
+			move.w	(a3,d0.w),d1
+
+			dbra		d6,.readbyte0
+
+			swap		d1
+*			cmp.w		d5,d1			;check CRC-8
+			and.w		d7,d5
+			beq		.ok
+
+			
+			move.w	d4,-BYTESPERBLOCK*2(a1)											
+			bra		.hs0
+			
+.encodetab:
+			incbin	"incbin/floppyencode"
+.ok
+			swap		d1
+			and.w		d1,(a1)
+			
+			move.l	blocksok(a6),a1
+			st.b		0(a1,d2.w)
+			subq.b	#1,nblocksnok(a6)
+			
+			bra		.hs0	
+				
+*			cmp.w		#TRACKSYNC,d0
+*			beq.s		.tracknowread
+*.errorfound:			
+*			moveq		#EVIDEOREAD,d2
+
+.tracknowread:	
+			movea.l	a0,a1
+			move.l	#SYNC<<16|SYNC,d0
+			moveq.l	#SECTORSPERTRACK-1,d1
+.putsync:
+			move.l	d0,(a1)
+			lea.l		SECSIZE(a1),a1
+			dbra		d1,.putsync
+			moveq		#1,d0
+			and.w		-4(a1),d0
+			ror.w		#1,d0
+			eor.w		#$AAAA,d0
+			move.w	d0,-2(a1)
+			
+			tst.b		nblocksnok(a6)
+			sne.b		d0
+			ext.w		d0
+			ext.l		d0
+			
+			movem.l	(sp)+,d2-d7/a2-a4
+			rts							
+
+
+
+startwrite:  
+* a0.l:ptr to raw track
+			move.w	#INTF_DSKBLK,intreq(a5)
+
+			move.w	#ADKF_WORDSYNC|ADKF_PRECOMP0|ADKF_PRECOMP1,adkcon(a5)
+			cmp.w		#NUMTRACKS/2,track(a6)
+			sge.b		d0
+			ext.w		d0
+			and.w		#ADKF_SETCLR|ADKF_PRECOMP0,d0
+			move.w	d0,adkcon(a5)
+
+			move.w	#0,dsklen(a5)
+			move.l	a0,dskpt(a5)
+			move.w	#DSKF_DMAEN|DSKF_WRITE+((GAPSIZE+SECSIZE*SECTORSPERTRACK)/2)-0,d0
+			move.w	D0,dsklen(A5)
+			move.w	D0,dsklen(A5)   ;START schrijven
+
+			rts
+			
+waitwrite:
+			moveq.l	#INTF_DSKBLK,d0
+			and.w		intreqr(a5),d0
+			beq.s		waitwrite
+			move.w	d0,intreq(a5)
+			move.w	#0,dsklen(a5)
+			
+			rts
+			
+							
+
+andtab:
+			dcb.l		128,$FFFF7FFF
+crctab8times2:
+			incbin	"incbin/crctab8times2"
+			end
+			
+

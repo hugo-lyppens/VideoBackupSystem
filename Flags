@@ -1,0 +1,16 @@
+
+Too few arguments to grep
+
+grep [>outfile] [flags] pattern files ...
+
+Flags:
+	-$   make case insignificant
+	-c   print only a count of the matched lines
+	-f   print only names of files in which a match was found
+	-m   use msdos wildcards
+	-n   shut off line numbering
+	-p   filter input for printable characters
+	-q   "quiet" flag -- don't display file names or line numbers
+	-s   show name of each file as it is being searched
+	-v   print only lines in which a match is not found
+	-V   print version of grep

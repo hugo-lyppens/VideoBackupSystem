@@ -1,0 +1,1 @@
+enum { PATH_OK = 50, PATH_CANCEL, PATH_STRING };

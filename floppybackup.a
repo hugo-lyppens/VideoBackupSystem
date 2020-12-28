@@ -1,0 +1,807 @@
+*floppybackup.s
+			INCLUDE	"video.i"
+			INCLUDE	"vbserror.i"
+
+HBYTESSIZE	equ	44
+BLOCKSIZE	equ	(17*HBYTESSIZE)
+COPOFSDELT	equ	5*BLOCKSIZE
+
+SECTORERROR	equ		1
+SUMERROR		equ		2
+
+
+lib_vectsize	equ	6
+lib_base	equ	-lib_vectsize
+
+_RVOAllocUnit	equ	lib_base-(0*lib_vectsize)
+_RVOFreeUnit	equ	lib_base-(1*lib_vectsize)
+_RVOGetUnit	equ	lib_base-(2*lib_vectsize)
+_RVOGiveUnit	equ	lib_base-(3*lib_vectsize)
+_RVOGetUnitID	equ	lib_base-(4*lib_vectsize)
+
+			
+			xref		vars,_DRResource,testfloppy
+			xref		waitvb,fillblock,writeblack,writesync,shownextplane,clearblock
+			xref		writecopperlist
+			xref		crctab8,lsb4table,msb4table
+			
+			xdef		gototrack,gotonexttrack,cleanupfloppy,initfloppy,motor,stepdelay
+			xdef		_VFG_BackupFloppy,_VFG_SetBuffers
+			xdef		_GetUnit,_GiveUnit
+							
+
+_VFG_BackupFloppy:
+bf_drivenr	 equ		4
+bf_decodetab equ     8
+			move.l	bf_drivenr(sp),d0
+			move.l	bf_decodetab(sp),d1
+			movem.l	D1-D7/A0-A6,-(SP)
+			lea.l		vars(PC),a6			
+			lea.l		$DFF000,a5
+			
+			move.l	d1,decodetab(a6)
+			
+			move.w	d0,d2
+
+			bsr		initfloppy
+			
+			bsr		testfloppy
+			move.l	d0,d3
+			cmp.w		#ENODISKINDRIVE,d0
+			beq		quit1
+			
+			st.b		d2
+			bsr		motor
+			move.w	#0,d2
+			bsr		gototrack
+									
+			lea.l		trackbuffers(a6),a2
+			sf			TB_SIZEOF*0+TB_valid(a2)
+			sf			TB_SIZEOF*1+TB_valid(a2)
+			sf			TB_SIZEOF*2+TB_valid(a2)
+			sf			TB_SIZEOF*3+TB_valid(a2)
+			move.w	#0,d2;		readtracknr
+
+.nexttrack:
+			bsr		testfloppy
+			move.l	d0,d3
+			cmp.w		#ENODISKINDRIVE,d3
+			beq		.break
+			btst.b	#6,$bfe001
+			beq		.break
+
+			cmp.w		#PREREAD,d2
+			bne.s		.dontinstall
+
+				clr.w		dumptracknr(a6)
+
+				lea.l		trackbuffers(a6),a0
+				move.l	a0,dumptrack(a6)
+			
+				move.w	#NUMREPEAT,numrepeat(a6)
+				move.w	#2*COPOFSDELT,copofsdelt(a6)
+				clr.w		framecount(a6)
+			
+				lea.l		floppywrite_vblank(pc),a0
+				move.l	a0,vb_routine(a6)
+.dontinstall:
+
+.noggeldig:
+			tst.b		TB_valid(a2)
+			bne.s		.noggeldig
+			
+			moveq.l	#RETRIES,d3
+
+
+.retry:	bsr		startread
+			bsr		waitread
+			tst.w		d0
+			bne		.readerror
+
+			move.l	a2,a0
+			bsr		checkread
+			tst.w		d0
+			beq.s		.goed
+			dbra		d3,.retry
+*			cmp.w		#SECTORERROR,d0
+*			beq.s		.readerror
+			bra.s		.readerror
+			
+.goed		st			TB_valid(a2)
+			lea		trackbuffers+TRACKSINCACHE*TB_SIZEOF(a6),a0
+
+			lea		TB_SIZEOF(a2),a2
+			cmp.l		a0,a2
+			blt.s		.nowrap
+			lea		trackbuffers(a6),a2
+.nowrap:
+			addq.w	#1,d2
+			cmp.w		#NUMTRACKS,d2
+			bge.s		.wachttotvbklaaris
+			bsr		waitvb
+			bsr		gotonexttrack
+			bsr		waitvb
+			bra		.nexttrack
+			
+.wachttotvbklaaris:
+			tst.l		vb_routine(a6)
+			bne.s		.wachttotvbklaaris
+			
+			bsr		waitvb
+			moveq		#EOK,d3
+			bra.s		quit
+			
+
+.break:
+			moveq		#EBREAK,d3
+			bra.s		quit
+			
+.readerror:
+			moveq		#EREAD,d3
+			
+quit:
+			clr.l		vb_routine(a6)
+			bsr		writeblack
+
+			sf.b		d2
+			bsr		motor
+
+quit1:
+			bsr		cleanupfloppy
+			
+			move.l	d3,d0
+			movem.l	(SP)+,D1-D7/A0-A6
+			rts
+
+
+ENDM_LEN equ  2
+;(FRAMESPERTRACK*BLOCKSPERFRAME-BLOCKSPERTRACK)
+
+			
+floppywrite_vblank:
+			movem.l	d2-d7/a2-a6,-(sp)
+			lea		vars(pc),a6
+			lea		$dff000,a5			
+			
+			cmp.w		#NUMTRACKS,dumptracknr(a6)
+			blt.s		.nognietklaar
+			bsr		writeblack
+			clr.l		vb_routine(a6)			;stap uit
+			bra		.quit
+.nognietklaar:
+
+			move.l	dumptrack(a6),a3
+			tst.b		TB_valid(a3)
+			bne.s		.validtrack
+			move.w	#TRACKSYNC,d0
+			bsr		writesync
+			bra		.quit
+			
+.validtrack:
+			tst.w		framecount(a6)
+			bne.s		.busy
+			
+			move.l	TB_beginbuffer(a3),writepos(a6)
+			clr.w		blocknr(a6)
+			move.w	#FRAMESPERTRACK,framecount(a6)
+			
+.busy:
+				move.l	nextplane(a6),a0
+				move.w	copofsdelt(a6),d0
+				bsr		writecopperlist
+
+				move.l	nextplane(a6),a2
+				
+				cmp.w		#1,framecount(a6)
+				bne.s		.nietlaatsteframe
+				cmp.w		#1,numrepeat(a6)
+				bne.s		.nietlaatsteframe
+
+				lea		(BLOCKSPERFRAME-ENDM_LEN)*BLOCKSIZE(a2),a0
+				move.w	#TRACKSYNC,d0
+				move.w	#17*ENDM_LEN,d1
+				bsr		fillblock
+.nietlaatsteframe:	
+				bsr		shownextplane		
+			
+			subq.w	#1,framecount(a6)
+			bne.s		.quit
+
+			sub.w		#COPOFSDELT,copofsdelt(a6)
+			subq.w	#1,numrepeat(a6)
+			bne.s		.quit			
+
+			move.w	#NUMREPEAT,numrepeat(a6)
+			move.w	#2*COPOFSDELT,copofsdelt(a6)
+			
+			move.l	dumptrack(a6),a3
+			sf.b		TB_valid(a3)
+			
+			lea		trackbuffers+TRACKSINCACHE*TB_SIZEOF(a6),a0
+
+			lea		TB_SIZEOF(a3),a3
+			cmp.l		a0,a3
+			blt.s		.nowrap
+			lea		trackbuffers(a6),a3
+.nowrap:
+			move.l	a3,dumptrack(a6)
+			addq.w	#1,dumptracknr(a6)
+			
+.quit:	
+
+			movem.l	(sp)+,d2-d7/a2-a6
+			rts
+						
+			
+	
+floppywritecopperlist:
+* d0.w offset in copperlist d1.w blocknr eerste blok
+* a0.l primary coplist 
+* a2.l ptr to TB struct
+
+			movem.l	d2-d7/a2-a5,-(a7)
+
+			movea.l	a2,a4
+			lea		(BLOCKSPERFRAME*BLOCKSIZE)(a0),a1
+			move.l	a1,flipadr(a6)
+			move.l	a0,topadr(a6)
+			lea.l		crctab8(pc),a1
+			lea.l		lsb4table(pc),a2
+			lea.l		msb4table(pc),a3
+			lea.l		(a0,d0.w),a0
+			movea.l	writepos(a6),a5
+			move.l	TB_endbuffer(a4),d6
+			move.b	writepart(a6),d0
+			cmp.b		#PREGAP,d0
+			bne.s		.postgap
+			move.l	TB_gap(a4),d6
+.postgap:
+ORWAARDE	equ		$00
+
+			move.w	#BLOCKSPERFRAME,blockcounter(a6)
+.writeblock:
+*			cmp.l		#64*2,a5
+*			ble		.emptyblk
+			cmp.b		#WRITTEN,writepart(a6)
+			beq		.emptyblk
+			move.w	#HEADERSYNC0,d0
+			wrevenbyte9
+			lea.l		12(a0),a0
+			moveq		#0,d0
+			wrevenbyte8
+			
+			clr.w		d0
+			move.b	blocknr(a6),d0
+			move.w	d0,d5
+			addq.b	#1,blocknr(a6)
+			wroddbyte8
+			moveq.l	#16-1,d7
+.writescanline:
+			cmp.l		d6,a5
+			blt.s		.nwrittenyet
+
+			addq.b	#1,writepart(a6)
+			movea.l	TB_beginbuffer(a4),a5
+			move.l	a5,d0
+			bne.s		.noproblem
+			move.b	#WRITTEN,writepart(a6)
+			move.l	TB_aftergap(a4),a5
+			bra.s		.nwrittenyet
+.noproblem:
+			move.l	TB_gap(a4),d6					;>128
+			
+*			cmp.b		#WRITTEN,writepart(a6)
+*			bne.s		.nwrittenyet
+*			sub.l		a5,a5
+* weggehaald: als het track afgelopen is zullen de laatste 64 bytes
+*             een kopie zijn van het stuk vanaf beginbuffer
+.nwrittenyet:
+			moveq.l	#$55,d0
+			and.b		(a5)+,d0
+			moveq.l	#$55,d1
+			and.b		(a5)+,d1
+			add.b		d0,d0
+			add.b		d1,d0
+			add.b		d0,d5
+*			wrevenbyte8
+			
+			moveq.l	#$55,d0
+			and.b		(a5)+,d0
+			moveq.l	#$55,d1
+			and.b		(a5)+,d1
+			add.b		d0,d0
+			add.b		d1,d0
+			
+			add.b		d0,d5
+*			wroddbyte8
+			lea 22(a0),a0
+			moveq.l	#$55,d0
+			and.b		(a5)+,d0
+			moveq.l	#$55,d1
+			and.b		(a5)+,d1
+			add.b		d0,d0
+			add.b		d1,d0
+			add.b		d0,d5
+			wrevenbyte8
+			
+			moveq.l	#$55,d0
+			and.b		(a5)+,d0
+			moveq.l	#$55,d1
+			and.b		(a5)+,d1
+			add.b		d0,d0
+			add.b		d1,d0
+			
+			add.b		d0,d5
+			wroddbyte8
+			dbra		d7,.writescanline
+
+			lea		-BLOCKSIZE+10(a0),a0
+			move.w	d5,d0
+			wroddbyte8
+			lea		BLOCKSIZE-22(a0),a0
+			bra.s		.end
+.emptyblk:
+			move.l	a0,a5
+			move.w	#17,d1
+			bsr		clearblock
+			lea		BLOCKSIZE(a5),a0
+.end:
+			cmp.l		flipadr(a6),a0
+			blt.s		.noflip
+			move.l	topadr(a6),a0
+.noflip:	subq.w	#1,blockcounter(a6)
+			bne		.writeblock
+
+			move.l	a5,writepos(a6)
+				
+			movem.l	(a7)+,d2-d7/a2-a5
+			rts
+			
+			
+
+startread:  
+* a2.l:ptr to trackbuf struct
+			move.w	#INTF_DSKBLK,intreq(a5)
+
+			move.w	#0,dsklen(a5)
+			move.l	TB_bufadr(a2),dskpt(a5)
+			move.w	#DSKF_DMAEN+(TRACKBUFSIZE/2),d0
+			move.w	D0,dsklen(A5)
+			move.w	D0,dsklen(A5)   ;START LEZEN
+
+			rts
+			
+waitread:
+			move.b	ciab+ciaicr,d0
+			moveq.l	#3-1,d1			;telt indexen af
+.wr		move.w	intreqr(a5),d0
+			btst.l	#INTB_DSKBLK,d0
+			bne.s		.ready
+			btst		#CIAICRB_FLG,ciab+ciaicr
+			beq		.wr		
+			dbra		d1,.wr
+			moveq		#-1,d0			;error
+			bra.s		.eind
+.ready:	moveq		#0,d0
+.eind:	move.w	#0,dsklen(a5)
+			rts
+			
+checkread:
+*	a0.l: pointer to trackbuffer structure. Routine fills TB struct and decodes track
+* Trackbuffer structure looks like this:
+
+*************************************************************************************
+*			APTR		TB_bufadr				;points to starting address of buffer or NULL
+*			APTR		TB_beginbuffer			;points first sector in buffer
+*			APTR		TB_gap					;points to beginning of track gap
+*			APTR		TB_aftergap				;points to first sector after gap
+*			APTR		TB_endbuffer			;points just after last sector read
+*			USHORT	TB_valid					;whether this track is valid.
+*************************************************************************************
+
+			movem.l	d2-d7/a2-a6,-(SP)
+		
+			moveq.l	#0,d4					;returncode
+			movea.l	TB_bufadr(a0),a3
+			
+			move.w	#SYNC,d3
+			cmp.w		(a3),d3
+			bne.s		.error
+			cmp.w		2(a3),d3
+			beq.s		.goedzo
+			move.w	d3,-(a3)
+.goedzo:
+			move.l	a3,TB_beginbuffer(a0)
+			movea.l	a3,a4
+			lea.l		TRACKBUFSIZE(a3),a5
+			moveq		#SECTORSPERTRACK,d2
+
+						;misschien vind ik nu 11 sectors achter elkaar!
+.lus		cmp.w		(a3),d3
+			beq.s		.nogap
+.searchendofgap:		
+			cmp.l		a5,a3
+			bge.s		.error
+
+			cmp.w		(a3)+,d3
+			bne.s		.searchendofgap
+			subq.l	#2,a3
+			cmp.w		2(a3),d3
+			beq.s		.dubbelsync
+			move.w	d3,-(a3)
+			bra.s		.dubbelsync
+.nogap:
+			cmp.w		2(a3),d3
+			bne.s		.error
+.dubbelsync:			
+			move.w	d2,d0
+			move.l	a4,a1
+			move.l	a3,a0
+			bsr		checksector
+			beq.s		.secok1
+			moveq.l	#SUMERROR,d4
+			bra.s		.klaar
+.secok1:
+			lea.l		SECSIZE(a3),a3
+			lea.l		SECSIZE/2(a4),a4
+			subq.w	#1,d2
+			bne.s		.lus
+			
+			moveq		#0,d4
+			bra.s		.klaar
+.error:
+			moveq.l	#SECTORERROR,d4
+.klaar:	move.l	d4,d0
+			movem.l	(SP)+,d2-d7/a2-a6
+			rts
+
+
+checksector:
+*a0.l		pointer naar ongedecodeerde sector
+*a1.l    pointer naar waar gedecodeerde sector komt
+*d0.l		"Sectors until end of write", 11 tot 1
+*sector = 270 long words.
+
+			movem.l	a2-a3/d2-d7,-(SP)
+
+			move.b	#$AA,d1
+			and.b		d0,d1
+			lsr.b		#1,d1
+			moveq		#$55,d2
+			and.b		4+3(a0),d2
+			move.b	d1,4+3(a0)
+			eor.b		d1,d2
+			eor.b		d2,4+8+32+4+3(a0)
+			
+			moveq		#$55,d1
+			and.b		d0,d1
+			moveq		#$55,d2
+			and.b		4+3+4(a0),d2
+			move.b	d1,4+3+4(a0)
+			eor.b		d1,d2
+			eor.b		d2,4+8+32+4+3(a0)
+
+			movea.l	decodetab(a6),a2
+			adda.l	#32768,a2
+			
+			move.w	(a0)+,d2
+			move.b	(a2,d2.w),(a1)+
+			move.w	(a0)+,d2
+			move.b	(a2,d2.w),(a1)+
+			
+			moveq		#0,d0
+			moveq		#(270/6)-1,d1
+.leor:
+			movem.l	(a0)+,d2-d7		;6 lw
+			eor.l		d2,d0
+			eor.l		d3,d0
+			eor.l		d4,d0
+			eor.l		d5,d0
+			eor.l		d6,d0
+			eor.l		d7,d0
+			swap		d2
+			move.b	(a2,d2.w),(a1)+
+			swap		d2
+			move.b	(a2,d2.w),(a1)+
+			swap		d3
+			move.b	(a2,d3.w),(a1)+
+			swap		d3
+			move.b	(a2,d3.w),(a1)+
+			swap		d4
+			move.b	(a2,d4.w),(a1)+
+			swap		d4
+			move.b	(a2,d4.w),(a1)+
+			swap		d5
+			move.b	(a2,d5.w),(a1)+
+			swap		d5
+			move.b	(a2,d5.w),(a1)+
+			swap		d6
+			move.b	(a2,d6.w),(a1)+
+			swap		d6
+			move.b	(a2,d6.w),(a1)+
+			swap		d7
+			move.b	(a2,d7.w),(a1)+
+			swap		d7
+			move.b	(a2,d7.w),(a1)+
+			
+			dbra		d1,.leor
+			clr.w		(a1)
+			
+			movem.l	(SP)+,a2-a3/d2-d7
+			and.l		#$55555555,d0									
+			rts
+			
+gototrack:
+* d2.w: new track
+			movem.l	d2/d3,-(a7)
+			cmp.w		#NUMTRACKS,d2
+			bge.s		.quit
+			move.w	d2,d3
+			move.b	ciabprb(a6),d0
+			and.b		#~CIAF_DSKSIDE,d0
+			and.w		#~1,track(a6)
+			btst.l	#0,d2
+			beq.s		.upper
+			or.w		#1,track(a6)
+			or.b		#CIAF_DSKSIDE,d0
+.upper	
+			move.b	d0,ciabprb(a6)
+			or.b		#CIAF_DSKMOTOR,d0
+			move.b	d0,ciab+ciaprb
+			moveq.l	#SEEKP,d2
+			sub.w		track(a6),d3
+			bpl.s		.move
+			moveq.l	#SEEKN,d2
+			neg.w		d3
+.move		subq.w	#2,d3
+			bmi.s		.quit
+			bsr		step
+			bra.s		.move
+.quit		bsr		stepdelay
+			bsr		stepdelay
+			bsr		stepdelay
+			bsr		stepdelay
+			bsr		stepdelay
+			bsr		stepdelay
+			bsr		stepdelay
+			bsr		stepdelay
+			bsr		stepdelay
+			bsr		stepdelay
+			bsr		stepdelay
+			bsr		stepdelay
+			bsr		stepdelay
+			movem.l	(a7)+,d2/d3
+			rts
+
+gotonexttrack:
+* no parameters
+			move.l	d2,-(a7)
+			lea		ciab,a0
+			move.w	track(a6),d2
+			addq.w	#1,d2
+			cmp.w		#NUMTRACKS,d2
+			bge.s		.quit
+			move.w	d2,track(a6)
+			move.b	ciabprb(a6),d0
+
+			btst		#0,d2
+			bne.s		.lower
+			and.b		#~CIAF_DSKSIDE,d0
+			move.b	d0,ciabprb(a6)
+			or.b		#CIAF_DSKMOTOR|CIAF_DSKSTEP,d0
+			move.b	d0,ciaprb(a0)
+			moveq		#SEEKP,d2
+			bsr.s		dostep
+
+			bra.s		.quit
+.lower
+			or.b		#CIAF_DSKSIDE,d0
+			move.b	d0,ciabprb(a6)
+			or.b		#CIAF_DSKMOTOR|CIAF_DSKSTEP,d0
+			move.b	d0,ciaprb(a0)
+.quit
+			move.l	(a7)+,d2
+			rts
+			
+dostep:
+* a0.l: ciab d2.b: direction, -2 or 2 (SEEKN or SEEKP)
+			tst.w		d2
+			smi.b		d0
+			and.b		#CIAF_DSKDIREC,d0
+			or.b		ciabprb(a6),d0
+			or.b		#CIAF_DSKMOTOR|CIAF_DSKSTEP,d0
+			subq.b	#CIAF_DSKSTEP,d0
+
+			move.b	d0,ciaprb(a0)
+			addq.b	#CIAF_DSKSTEP,d0
+			move.b	d0,ciaprb(a0)
+			rts
+			
+step:
+* d2.b: direction, -2 or 2 (SEEKN or SEEKP)
+			lea		ciab,a0
+			add.w		d2,track(a6)
+
+			bsr.s		dostep
+			
+			bsr.s		stepdelay
+			rts
+stepdelay:
+			lea		ciab,a0			
+			bclr		#CIACRBB_ALARM,ciacrb(a0)
+			moveq		#0,d0
+			move.b	d0,ciatodhi(a0)
+			move.b	d0,ciatodmid(a0)
+			move.b	d0,ciatodlow(a0)
+			
+			move.l	#120,d0
+.headdelay:
+			cmp.b		ciatodlow(a0),d0
+			bge.s		.headdelay
+			
+			rts
+			
+motor:
+* d2.b: boolean on/off
+			move.b	ciabprb(a6),d0
+			and.b		#~CIAF_DSKMOTOR,d0
+			tst.b		d2
+			bne.s		.on
+			or.b		#CIAF_DSKMOTOR,d0
+.on		move.b	d0,ciabprb(a6)
+			move.b	d0,d1
+			or.b		#CIAF_NDSKSEL,d0
+			move.b	d0,ciab+ciaprb
+			move.b	d1,ciab+ciaprb			
+			tst.b		d2
+			beq.s		.off
+.wait		btst.b	#CIAB_DSKRDY,ciaa+ciapra
+			bne.s		.wait
+.off		rts
+			
+prbvalues:
+			dc.b		CIAF_DSKMOTOR|CIAF_NDSKSEL0|CIAF_DSKSTEP
+			dc.b		CIAF_DSKMOTOR|CIAF_NDSKSEL1|CIAF_DSKSTEP
+			dc.b		CIAF_DSKMOTOR|CIAF_NDSKSEL2|CIAF_DSKSTEP
+			dc.b		CIAF_DSKMOTOR|CIAF_NDSKSEL3|CIAF_DSKSTEP
+
+_VFG_SetBuffers:
+trbuf0ptr	equ	4
+trbuf1ptr	equ	8
+trbuf2ptr	equ	12
+trbuf3ptr	equ	16
+			lea.l		vars(pc),a0
+			move.l	trbuf0ptr(sp),d0
+			addq.l	#2,d0
+			move.l	d0,trackbuffers+TB_SIZEOF*0+TB_bufadr(a0)
+			move.l	trbuf1ptr(sp),d0
+			addq.l	#2,d0
+			move.l	d0,trackbuffers+TB_SIZEOF*1+TB_bufadr(a0)
+			move.l	trbuf2ptr(sp),d0
+			addq.l	#2,d0
+			move.l	d0,trackbuffers+TB_SIZEOF*2+TB_bufadr(a0)
+			move.l	trbuf3ptr(sp),d0
+			addq.l	#2,d0
+			move.l	d0,trackbuffers+TB_SIZEOF*3+TB_bufadr(a0)
+			rts
+			
+initfloppy:
+*d2.w:	drivenr
+			move.l	d2,-(sp)
+
+*			move.l	#trbuf0+2,trackbuffers+TB_bufadr(a6)
+*			move.l	#trbuf1+2,trackbuffers+TB_SIZEOF*1+TB_bufadr(a6)
+*			move.l	#trbuf2+2,trackbuffers+TB_SIZEOF*2+TB_bufadr(a6)
+*			move.l	#trbuf3+2,trackbuffers+TB_SIZEOF*3+TB_bufadr(a6)
+
+			move.b	#$AA,d0
+			move.l	#GAPSIZE,d1
+			move.l	trackbuffers+TB_bufadr(a6),a0
+			move.w	#$AAAA,GAPSIZE+SECSIZE*SECTORSPERTRACK(a0)
+			bsr		memset
+
+			move.b	#$AA,d0
+			move.l	#GAPSIZE,d1
+			move.l	trackbuffers+TB_SIZEOF*1+TB_bufadr(a6),a0
+			move.w	#$AAAA,GAPSIZE+SECSIZE*SECTORSPERTRACK(a0)
+			bsr		memset
+			
+			move.w	#DMAF_SETCLR|DMAF_DISK,dmacon(a5)	
+
+			move.b	#3,ciaa+ciaddra
+			move.b	#$ff,ciab+ciaddrb			
+			move.b	prbvalues(pc,d2.w),d0
+			move.b	d0,ciab+ciaprb
+			move.b	d0,ciabprb(a6)
+			
+			move.w	adkconr(a5),oldadkcon(a6)
+			move.w	#ADKF_SETCLR|ADKF_WORDSYNC|ADKF_FAST,adkcon(A5)
+
+			move.w	#SYNC,dsksync(A5)
+			clr.w		oldtrack(a6)
+*			moveq		#SEEKN,D2
+*L1			btst		#CIAB_DSKTRACK0,ciaa+ciapra
+*			beq.s		tr0
+*			bsr		step
+*			addq.w	#2,oldtrack(a6)
+*			bra.s		L1
+tr0		clr.w		track(a6)
+*			bsr		stepdelay
+*			bsr		stepdelay
+*			bsr		stepdelay
+*			bsr		stepdelay
+			move.l	(sp)+,d2
+			rts
+			
+cleanupfloppy:
+			move.w	oldtrack(A6),D2
+			bsr		gototrack
+			move.w	#$7FFF,adkcon(a5)
+			move.w	oldadkcon(a6),d0
+			or.w		#ADKF_SETCLR,d0
+			move.w	D0,adkcon(A5)
+
+			rts
+
+			
+			
+waitfire:
+.wd:		btst		#CIAB_GAMEPORT0,ciaa+ciapra
+			bne.s		.wd
+.wu:		btst		#CIAB_GAMEPORT0,ciaa+ciapra
+			beq.s		.wu
+			move.l	#$A00,d0	
+kaas		subq.l	#1,d0
+			bne.s		kaas
+			rts
+			
+
+copymem:	move.b	(a0)+,(a1)+
+memcpy:
+			dbra		d0,copymem
+			rts
+
+setmem:	move.b	d0,(a0)+
+memset:	dbra		d1,setmem
+			rts
+			
+
+;_AllocUnit:
+;		move.l	_DRResource,a6
+;		move.l	4(sp),d0
+;		jmp	_RVOAllocUnit(a6)
+;_FreeUnit:
+;		move.l	_DRResource,a6
+;		move.l	4(sp),d0
+;		jmp	_RVOFreeUnit(a6)
+_GetUnit:
+		move.l	_DRResource,a6
+		move.l	4(sp),a1
+		jmp	_RVOGetUnit(a6)
+;_GetUnitID:
+;		move.l	_DRResource,a6
+;		move.l	4(sp),d0
+;		jmp	_RVOGetUnitID(a6)
+_GiveUnit:
+		move.l	_DRResource,a6
+		jmp	_RVOGiveUnit(a6)
+
+
+			cnop		0,4
+diskdecodetab:
+			dc.w		0
+			
+
+
+*			section	bytes,DATA
+*			xref		EVENOFFSET,ODDOFFSET
+*			xref		HEADEROFFSET0,HEADEROFFSET1
+*			xref		BACKUPSYNCOFFSET,TRACKSYNCOFFSET,EMPTYOFFSET
+*
+*
+*			section	copper,DATA_C
+*			xref		cprblack,cprbetween
+*
+			end
+			
+

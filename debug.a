@@ -1,0 +1,24 @@
+* debug.a
+
+_LVORawPutChar	equ	-$204
+
+callsys	macro
+	jsr	_LVO\1(a6)
+	endm
+
+	xdef	_kputstr
+
+	xref	_SysBase
+
+	section	debug,CODE
+
+_kputstr
+	movem.l	a2/a6,-(sp)
+	move.l	_SysBase,a6
+	move.l	12(sp),a2
+loop	move.b	(a2)+,d0
+	bne	exit
+	callsys	RawPutChar
+	bra	loop
+exit	movem.l	(sp)+,a2/a6
+	rts

@@ -1,0 +1,750 @@
+	OPT		o+,ow-
+	INCDIR	"INCLUDE:"
+	INCLUDE	"exec/types.i"
+	INCLUDE	"exec/libraries.i"
+	INCLUDE	"exec/funcdef.i"
+	INCLUDE	"exec/memory.i"
+	INCLUDE	"exec/exec_lib.i"
+
+	INCLUDE	"tvsystem.i"
+			
+
+N		equ	255
+T		equ	8
+K		equ	(N-2*T)
+HIGHBIT	        equ     256
+
+	STRUCTURE VARIABLES,0
+		ULONG		numcw
+		ULONG		numcw_x_n_m_k
+		ULONG		lognumcw
+		ULONG		errscorr
+		STRUCT		Syndrome,16
+		APTR		qzeroptr
+		STRUCT		roots,2*(T+1)
+		WORD		var_i
+		WORD		var_zi
+		STRUCT		rootpowers,T+1
+		BYTE		elpgraad
+		STRUCT		omega,T+1
+		BYTE		discr
+		BYTE		discrzi
+		BYTE		var_a
+		STRUCT		q,(2*T+1)*(2*T+4)
+		LABEL		errlocpol
+		STRUCT		qeinde,2*T+4
+	LABEL		VARIABLES_SIZEOF
+
+			
+
+
+		xref	_RSG_machten,_RSG_multiply,_RSG_multinv
+		xref	_RSG_logaritme
+
+
+
+		ifd	ENCODEDECODE
+		xdef	_VWG_Encode,_VWG_Decode,
+		endc
+				
+		xdef	_VWG_CorrectErrs
+
+		section text,code
+
+
+		ifd	ENCODEDECODE
+
+
+en_addr		equ	4+4*(6+5)
+en_lognumcw	equ	8+4*(6+5)
+en_shiftregtab	equ	12+4*(6+5)
+en_modulotab	equ	16+4*(6+5)
+
+_VWG_Encode:
+	movem.l	d2-d7/a2-a6,-(sp)
+	
+	move.l	en_addr(sp),a0
+	move.l	en_modulotab(sp),a2
+	move.l	en_shiftregtab(sp),a4
+	lea.l	vars(PC),a6
+	move.l	en_lognumcw(sp),d2
+
+	moveq	#1,d0
+	lsl.l	d2,d0
+	move.l	d0,numcw(a6)
+		
+	move.l	a2,a1
+	moveq	#0,d0
+	moveq	#(N-K),d1
+	lsl.l	d2,d1
+	move.l	d1,numcw_x_n_m_k(a6)
+	lsr.l	#2,d1	;/4
+	subq.w	#1,d1
+.clrloop:
+	move.l	d0,(a1)+
+	dbra	d1,.clrloop
+
+	
+	moveq	#0,d6	;telt tot K
+	
+.l2:	
+	move.l	numcw(a6),d7
+	subq.l	#1,d7
+	
+	move.w	d6,d0
+;	subq.w	#1,d0
+	addq.w	#1,d0
+	and.w	#15,d0
+	lea.l	0(a2,d0.w),a1
+	move.l	d6,d0
+	addq.w	#2,d0
+	lsl.w	#6,d0
+	lsl.w	#6,d0	;shiftregtab is 64k!!
+	lea	0(a4,d0.l),a3
+.l1:	
+	moveq	#0,d0
+	move.b	(a0)+,d0
+	move.b	(a1),d1
+	clr.b	(a1)
+	eor.b	d1,d0
+	lsl.w	#4,d0
+	movem.l	0(a3,d0.w),d1-d4
+	eor.l	d1,(a2)+
+	eor.l	d2,(a2)+
+	lea.l	16(a1),a1
+	eor.l	d3,(a2)+
+	eor.l	d4,(a2)+
+   ifd koei
+	moveq	#0,d0
+	move.b	(a0)+,d0
+	move.b	(a1),d1
+	clr.b	(a1)
+	eor.b	d1,d0
+	lsl.w	#4,d0
+	movem.l	0(a3,d0.w),d1-d4
+	eor.l	d1,(a2)+
+	eor.l	d2,(a2)+
+	lea.l	16(a1),a1
+	eor.l	d3,(a2)+
+	eor.l	d4,(a2)+
+   endc		
+	dbra	d7,.l1
+	sub.l	numcw_x_n_m_k(a6),a2
+	addq.w	#1,d6
+	cmp.w	#K,d6
+	bne.s	.l2
+	
+
+	move.l	a2,a1
+	move.w	#N-K-1,d6
+.l4:	
+	move.l	numcw(a6),d7
+	lsr.l	#3,d7
+	subq.l	#1,d7
+.l3:	
+	move.b	   (a1),(a0)+
+	move.b	 16(a1),(a0)+
+	move.b	 32(a1),(a0)+
+	move.b	 48(a1),(a0)+
+	move.b	 64(a1),(a0)+
+	move.b	 80(a1),(a0)+
+	move.b	 96(a1),(a0)+
+	move.b	112(a1),(a0)+
+	lea.l	128(a1),a1
+	dbra	d7,.l3
+	sub.l	numcw_x_n_m_k(a6),a1
+	addq.l	#1,a1
+	dbra	d6,.l4
+.klaar
+	movem.l	(sp)+,d2-d7/a2-a6
+	moveq	#0,d0
+	rts
+	
+	
+	
+	
+	
+	
+	
+;		b = times(check[0] ^ data[j], genpol[2*T]);
+;		for(i = 0; i<2*T-1; i++) {
+;			check[i] = check[i+1] ^ times(b, genpol[2*T-1-i]);
+;		}
+;		check[2*T-1] = times(b, genpol[0]);
+	
+
+
+de_addr		equ	4+4*(6+5)
+de_lognumcw	equ	8+4*(6+5)
+de_shiftregtab	equ	12+4*(6+5)
+de_modulotab	equ	16+4*(6+5)
+
+_VWG_Decode:
+	movem.l	d2-d7/a2-a6,-(sp)
+	move.l	de_addr(sp),a0
+	move.l	de_shiftregtab(sp),a4
+	move.l	de_modulotab(sp),a2
+	
+	lea.l	vars(PC),a6
+	move.l	en_lognumcw(sp),d2
+
+	moveq	#1,d0
+	lsl.l	d2,d0
+	move.l	d0,numcw(a6)
+		
+	move.l	a2,a1
+	moveq	#0,d0
+	moveq	#(N-K),d1
+	lsl.l	d2,d1
+	move.l	d1,numcw_x_n_m_k(a6)
+	lsr.l	#2,d1	;/4
+	subq.w	#1,d1
+.dclrloop:
+	move.l	d0,(a1)+
+	dbra	d1,.dclrloop
+
+
+
+
+	
+	
+	moveq	#0,d6	;telt tot N
+	
+.dl2:	
+	move.l	numcw(a6),d7
+	subq.l	#1,d7
+	move.w	d6,d0
+;	subq.w	#1,d0
+	addq.w	#1,d0	;kies beginshift zdd eindres meteen goed is!
+	and.w	#15,d0
+	lea	0(a2,d0.w),a1
+	move.l	d6,d0
+	addq.w	#2,d0
+	lsl.w	#6,d0
+	lsl.w	#6,d0	;shiftregtab is 64k!!
+	lea	0(a4,d0.l),a3
+.dl1:	
+	moveq	#0,d0
+	move.b	(a1),d0
+	move.b	(a0)+,(a1)
+	lsl.w	#4,d0
+	movem.l	0(a3,d0.w),d1-d4
+	eor.l	d1,(a2)+
+	eor.l	d2,(a2)+
+	lea.l	16(a1),a1
+	eor.l	d3,(a2)+
+	eor.l	d4,(a2)+
+		
+	dbra	d7,.dl1
+	sub.l	numcw_x_n_m_k(a6),a2
+	addq.w	#1,d6
+	cmp.w	#N,d6
+	bne.s	.dl2
+	
+
+	movem.l	(sp)+,d2-d7/a2-a6
+	moveq	#0,d0
+	rts
+	
+	
+	ENDC
+	
+
+ce_addr		equ	4+4*(6+5)
+ce_lognumcw	equ	8+4*(6+5)
+ce_modulotab	equ	12+4*(6+5)
+
+_VWG_CorrectErrs:
+	movem.l	d2-d7/a2-a6,-(sp)
+	move.l	ce_addr(sp),a2
+	move.l	ce_modulotab(sp),a3
+	move.l	_RSG_multiply,a4
+	lea.l	vars(PC),a6
+	clr.l	errscorr(a6)
+	moveq	#1,d6
+	move.l	ce_lognumcw(sp),d1
+	move.l	d1,lognumcw(a6)
+	lsl.l	d1,d6
+	subq.l	#1,d6
+	
+	move.w	d6,d7
+.cwlus:	move.l	(a3)+,d0
+	or.l	(a3)+,d0
+	or.l	(a3)+,d0
+	or.l	(a3)+,d0	
+	dbne	d7,.cwlus
+	beq.s	.klaardec
+.foutontdekt:
+	lea	-16(a3),a0
+	bsr	CalcSyndrome
+	bsr	Berlekamp
+	move.w	d6,d1
+	sub.w	d7,d1
+	lea	0(a2,d1.w),a5
+	bsr	FindRoots
+	tst.l	d0
+	dbne	d7,.cwlus
+.klaardec:
+	tst.l	d0
+	sne.b	d0
+	ext.w	d0
+	ext.l	d0
+	or.l	errscorr(a6),d0	
+	movem.l	(sp)+,d2-d7/a2-a6
+	rts
+
+CalcSyndrome:
+;a0: modulo, a6: vars
+	movem.l	d2-d7/a2-a5,-(sp)
+	lea.l	_RSG_machten+1,a1
+	lea.l	Syndrome(A6),a2
+
+	
+	moveq	#0,d1
+	moveq	#0,d2
+	moveq	#0,d3
+	moveq	#0,d4
+	moveq	#0,d5
+	moveq	#0,d6
+	
+	move.b	(a1)+,d2
+	lsl.w	#8,d2
+	move.b	(a1)+,d3
+	lsl.w	#8,d3
+	move.b	(a1)+,d4
+	lsl.w	#8,d4
+	move.b	(a1)+,d5
+	lsl.w	#8,d5
+	move.b	(a0)+,d1
+	move.b	d1,d2
+	move.b	d1,d3
+	move.b	d1,d4
+	move.b	d1,d5
+	
+	moveq	#16-1-1,d7
+.cs1:	
+	move.b	(a0)+,d0
+	eor.b	d0,d1
+	move.b	0(a4,d2.l),d2
+	eor.b	d0,d2
+	move.b	0(a4,d3.l),d3
+	eor.b	d0,d3
+	move.b	0(a4,d4.l),d4
+	eor.b	d0,d4
+	move.b	0(a4,d5.l),d5
+	eor.b	d0,d5
+	dbra	d7,.cs1
+	move.b	d1,(a2)+
+	move.b	d2,(a2)+
+	move.b	d3,(a2)+
+	move.b	d4,(a2)+
+	move.b	d5,(a2)+
+	lea.l	-16(a0),a0
+
+	move.b	(a1)+,d1
+	lsl.w	#8,d1
+	move.b	(a1)+,d2
+	lsl.w	#8,d2
+	move.b	(a1)+,d3
+	lsl.w	#8,d3
+	move.b	(a1)+,d4
+	lsl.w	#8,d4
+	move.b	(a1)+,d5
+	lsl.w	#8,d5
+	move.b	(a0)+,d1
+	move.b	d1,d2
+	move.b	d1,d3
+	move.b	d1,d4
+	move.b	d1,d5
+	
+	moveq	#16-1-1,d7
+.cs2:	
+	move.b	(a0)+,d0
+	move.b	0(a4,d1.l),d1
+	eor.b	d0,d1
+	move.b	0(a4,d2.l),d2
+	eor.b	d0,d2
+	move.b	0(a4,d3.l),d3
+	eor.b	d0,d3
+	move.b	0(a4,d4.l),d4
+	eor.b	d0,d4
+	move.b	0(a4,d5.l),d5
+	eor.b	d0,d5
+	dbra	d7,.cs2
+	move.b	d1,(a2)+
+	move.b	d2,(a2)+
+	move.b	d3,(a2)+
+	move.b	d4,(a2)+
+	move.b	d5,(a2)+
+	lea.l	-16(a0),a0
+	
+	
+	move.b	(a1)+,d1
+	lsl.w	#8,d1
+	move.b	(a1)+,d2
+	lsl.w	#8,d2
+	move.b	(a1)+,d3
+	lsl.w	#8,d3
+	move.b	(a1)+,d4
+	lsl.w	#8,d4
+	move.b	(a1)+,d5
+	lsl.w	#8,d5
+	move.b	(a1)+,d6
+	lsl.w	#8,d6
+	move.b	(a0)+,d1
+	move.b	d1,d2
+	move.b	d1,d3
+	move.b	d1,d4
+	move.b	d1,d5
+	move.b	d1,d6
+	
+	moveq	#16-1-1,d7
+.cs3:	
+	move.b	(a0)+,d0
+	move.b	0(a4,d1.l),d1
+	eor.b	d0,d1
+	move.b	0(a4,d2.l),d2
+	eor.b	d0,d2
+	move.b	0(a4,d3.l),d3
+	eor.b	d0,d3
+	move.b	0(a4,d4.l),d4
+	eor.b	d0,d4
+	move.b	0(a4,d5.l),d5
+	eor.b	d0,d5
+	move.b	0(a4,d6.l),d6
+	eor.b	d0,d6
+	
+	dbra	d7,.cs3
+	move.b	d1,(a2)+
+	move.b	d2,(a2)+
+	move.b	d3,(a2)+
+	move.b	d4,(a2)+
+	move.b	d5,(a2)+
+	move.b	d6,(a2)+
+
+	movem.l	(sp)+,d2-d7/a2-a5
+	rts
+
+
+SI	equr	A1
+DI	equr	A2
+BP	equr	A3
+
+
+
+Berlekamp:  
+;a4:multtab, a6:vars
+	movem.l	d2-d7/a2-a5,-(sp)
+	    
+	lea	Syndrome(a6),a0
+	move.l	a0,a2
+	lea	q+1(a6),a1
+	moveq	#T*2-1,d0
+.bl1	move.b	(a0)+,(a1)+
+	dbra	d0,.bl1
+		
+	moveq	#T*2-1,d0
+	lea	q+2*T+4(a6),a1
+.bl2	move.b	(a2)+,(a1)+
+	dbra	d0,.bl2
+	
+
+	move.b	#1,q(a6)
+	move.b	#0,q+2*T+1(a6)
+	move.b	#1,q+2*T+2(a6)
+	
+	
+        move.b	#0,q+2*T+4+2*T(a6)
+        move.b	#1,q+2*T+4+2*T+1(a6)
+        move.b	#0,q+2*T+4+2*T+2(a6)
+        
+        clr.b	discr(a6)
+        move.b	#-1,discrzi(a6)
+        move.w	#2,var_i(a6)
+        clr.w	var_zi(a6)
+        lea	q(a6),BP
+        lea	q+(2*T+4)(a6),SI 
+        lea	2*(2*T+4)+(2*T-1)+q(a6),a0
+        move.l	a0,qzeroptr(a6)
+        
+.iter:  lea     2*T+4(SI),DI
+	move.b	(SI)+,d0
+	bne.s	.else2
+
+	
+	moveq.l	#(T+1)*2-1,d2
+3$	move.b	(SI)+,(DI)+
+	dbra	d2,3$
+	
+	clr.b	(DI)
+
+	addi.l	#2*T+3,qzeroptr(a6)
+	addq.w	#1,var_i(a6)
+	addq.b	#1,discr(a6)
+	addq.l	#1,SI
+	lea.l	qeinde(a6),a0
+	cmp.l	a0,SI
+	bne.s	.iter
+	bra	.readyberl
+
+.else2:	moveq	#0,d1
+	move.b  (BP),d1    ;q[zi][0]
+	lea	_RSG_multinv,a0
+	move.b	0(a0,d1.w),d1
+	lsl.w	#8,d1
+	move.b	d0,d1		;q[i-1][0]
+	move.b	0(a4,d1.l),d1
+	lsl.w	#8,d1
+	moveq	#2*T+1,d2
+	sub.w	var_i(a6),d2
+	beq.s	.overslaan1
+	subq.w	#1,d2
+.lus21:
+	addq.l	#1,BP
+	move.b	(BP),d1
+	move.b	(SI)+,d0
+	move.b	0(a4,d1.l),d4
+	eor.b	d4,d0
+	move.b	d0,(DI)+
+	dbra	d2,.lus21
+.overslaan1:
+	move.w	var_i(a6),d2
+	sub.w	var_zi(a6),d2
+	beq.s	.overslaan2
+	subq.w	#1,d2
+.lus22:
+	addq.l	#1,BP
+	move.b	(SI)+,(DI)+
+	dbra	d2,.lus22
+.overslaan2:
+	move.w	var_zi(a6),d2
+	addq.w	#1,d2
+	beq.s	.overslaan3
+	subq.w	#1,d2
+.lus23:
+	addq.l	#1,BP
+	move.b	(BP),d1
+	move.b	(SI)+,d0
+	move.b	0(a4,d1.l),d4
+	eor.b	d4,d0
+	move.b	d0,(DI)+
+	dbra	d2,.lus23
+.overslaan3:
+	clr.b	(DI)
+	addq.l	#1,SI
+	addq.l	#2,DI
+	sub.w	#2*T+2,BP
+	move.l	qzeroptr(a6),a0
+	clr.b	(a0)
+	add.l	#2*T+3,qzeroptr(a6)
+	lea	qeinde(a6),a0
+	cmp.l	SI,a0
+	beq	.readyberl
+	move.b	discr(a6),d0
+	move.b	discrzi(a6),d1
+	addq.b	#1,discr(a6)
+	cmp.b	d1,d0
+	blt.s	.gotoiter
+	
+	move.b	d0,discrzi(a6)
+	addq.b	#1,d1
+	move.b	d1,discr(a6)
+	lea	-(2*T+4)(SI),BP
+	move.w	var_i(a6),d1
+	subq.w	#1,d1
+	move.w	d1,var_zi(a6)
+.gotoiter:
+	addq.w	#1,var_i(a6)
+	bra	.iter
+.readyberl:
+	move.b	#1,errlocpol+1(A6)			
+	movem.l	(sp)+,d2-d7/a2-a5
+	moveq	#0,d0
+	rts
+
+
+
+FindRoots:
+;a4:multtab, a5:start of code word, a6:vars
+	movem.l	d2-d7/a2-a5,-(sp)
+	lea	2*T+errlocpol(a6),DI
+	moveq	#2*T-2,d2
+1$	
+	move.b	-(DI),d0
+	dbne	d2,1$
+	
+
+	moveq	#0,d0
+
+;	move.b	d2,elpgraad(a6)
+	cmp.b	#1,d2
+	bne.s	meerdaneenfout
+;/*    if(elpgraad == 1) {
+;	data[HIGHBIT-2-logaritme[q[2*T+1][2]]] ^= syndrome[0];
+;    }*/
+	addq.l	#1,errscorr(a6)
+	moveq	#0,d1
+	move.b	errlocpol+2(a6),d1
+	move.l	#HIGHBIT-2,d0
+	lea.l	_RSG_logaritme,a0
+	sub.b	0(a0,d1.w),d0
+	cmp.l	#HIGHBIT-1,d0
+	bhs	vreemd
+	move.l	lognumcw(a6),d4
+	lsl.l	d4,d0
+	move.b	Syndrome(a6),d4
+	eor.b	d4,0(a5,d0.l)
+	moveq	#0,d0
+	bra	readyfr
+meerdaneenfout:
+	cmp.b	#T,d2
+	bhi.s	onoplosbaar
+	move.w	d2,d3		;d3 = elpgraad
+	lea	roots(a6),DI
+	move.l	#$0100,d1
+	moveq	#1,d5		;d1 = d5<<8
+	moveq	#0,d6		;numroots
+nextnumber:
+	move.b	#1,d1
+	lea	errlocpol+2(a6),SI
+	move.w	d3,d2
+	subq.w	#1,d2
+evalpoly:	
+	move.b	0(a4,d1.l),d1
+	move.b	(SI)+,d4
+	eor.b	d4,d1
+	dbra	d2,evalpoly
+	tst.b	d1
+	beq.s	foundroot
+	add.w	#256,d1		; add 1 to d1.h
+	addq.b	#1,d5
+	bcc.s	nextnumber
+	bra	allfound
+	
+onoplosbaar:
+	moveq	#-1,d0
+	bra	readyfr
+
+foundroot:
+	lea	_RSG_logaritme,a0
+	move.b	0(a0,d5.w),(DI)+
+	lea	_RSG_multinv,a0
+	move.b	0(a0,d5.w),(DI)+
+	move.b	d5,rootpowers(a6,d6.w)
+	addq.w	#1,d6
+	
+	add.w	#256,d1		; add 1 to d1.h
+	addq.b	#1,d5
+	bcc.s	nextnumber
+	
+allfound:
+	move.w	#$FF00,(DI)
+	cmp.b	d6,d3		; is numroots gelijk aan elpgraad?
+	bne.s	onoplosbaar
+ ; moveq #0,d0
+ ; bra readyfr
+ 
+	add.l	d6,errscorr(a6)
+	clr.b	rootpowers(a6,d6.w)
+	
+	moveq	#0,d3
+;	    xor     ch,ch
+	moveq	#0,d5		;ch
+	lea	omega(a6),DI
+	
+glus:   move.w	d3,d2
+	lea	errlocpol+1+1(a6),BP ;extra+1 voor predecr
+	adda.w	d2,BP
+	lea	Syndrome(a6),SI
+	moveq	#0,d0
+	moveq	#0,d1
+	
+blus:	move.b	-(BP),d1
+	lsl.w	#8,d1
+	move.b	(SI)+,d1
+	move.b	0(a4,d1.l),d4
+	eor.b	d4,d0
+	dbra	d2,blus
+	
+	move.b	d0,(DI)+
+	addq.w	#1,d3
+	cmp.w	d6,d3
+	bne.s	glus
+	
+	clr.b	(DI)
+	
+	lea	roots(A6),SI
+	move.b	(SI)+,d2
+	move.b	(SI)+,d5	;ch
+	
+correcterrs:
+	moveq	#0,d1
+	move.b	d5,d1		;ch
+	lsl.w	#8,d1
+	lea     omega-1(a6,d3.w),DI
+	
+	move.b	1(DI),d1
+	lea	omega(a6),a0
+berekena:
+	move.b	0(a4,d1.l),d1
+	move.b	(DI),d4
+	eor.b	d4,d1
+	subq.l	#1,DI
+	cmp.l	a0,DI
+	bge.s	berekena
+	move.b	d1,var_a(a6)
+	
+	lea	rootpowers(a6),DI
+	moveq	#0,d1
+	move.w	(DI),d1		;get (DI) in d1.h
+	moveq	#1,d0
+berekenc:
+	addq.l	#1,DI
+	move.b	d5,d1
+	move.w	0(a4,d1.l),d4
+	move.b	d1,d4
+	eor.w	#256,d4
+	move.w	d4,d1
+	and.w	#$FF00,d4
+	beq.s	skipthis
+	move.b	d0,d1
+	move.b	0(a4,d1.l),d0
+skipthis:
+	move.w	(DI),d4
+	move.b	d1,d4
+	move.w	d4,d1
+	and.w	#$FF00,d4
+	bne.s	berekenc
+	moveq	#0,d1
+	move.w	var_a(a6),d1	;get var_a in d1.h
+	lea	_RSG_multinv,a0
+	move.b	0(a0,d0.w),d1
+	move.b	0(a4,d1.l),d0
+		
+
+
+	move.l	#HIGHBIT-2,d1
+	sub.b	d2,d1		;cl???
+	move.l	lognumcw(a6),d4
+	cmp.l	#HIGHBIT-1,d1
+	bhs	vreemd
+	lsl.l	d4,d1
+	eor.b	d0,0(a5,d1.l)
+	
+	move.b	(SI)+,d2
+	move.b	(SI)+,d5	;ch
+	bne	correcterrs
+	moveq	#0,d0	
+readyfr:	    
+	movem.l	(sp)+,d2-d7/a2-a5
+	rts
+vreemd:
+	move.w	d0,$dff180
+	addq.w	#1,d0
+	bra	vreemd
+	
+	cnop	0,4
+vars	ds.b	VARIABLES_SIZEOF
+
+	end
+		

@@ -1,0 +1,7 @@
+FROM LIB:c.o "rstest.o"+"rs.o"+"vwtest.o"+"datacomp.o"
+TO "rstest"
+LIB sc:lib/scm881.lib LIB:scnb.lib LIB:amiga.lib
+ADDSYM
+VERBOSE
+NOICONS
+

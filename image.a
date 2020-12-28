@@ -1,0 +1,25 @@
+			
+
+			section	images,DATA_C
+			
+			xdef	_IMG_logim0data,_IMG_logim1data
+			xdef	_LSPhrImageData
+			xdef	_LSPmrImageData
+		xdef	_FloppymrImageData,_FloppyhrImageData
+		xdef	_FilesmrImageData,_FileshrImageData
+		xdef	_LogmrImageData,_LoghrImageData
+			
+_IMG_logim0data:
+			incbin		"art/logicon0.pic.hi2"
+
+_IMG_logim1data:
+			incbin		"art/logicon1.pic.hi2"
+
+_LSPmrImageData:	incbin		"art/LSPmr.ilbm.hi1"
+_LSPhrImageData:	incbin		"art/LSPhr.ilbm.hi1"
+_FloppymrImageData:	incbin		"art/floppymr.ilbm.hi3"
+_FloppyhrImageData:	incbin		"art/floppyhr.ilbm.hi3"
+_FilesmrImageData:	incbin		"art/filesmr.ilbm.hi3"
+_FileshrImageData:	incbin		"art/fileshr.ilbm.hi3"
+_LogmrImageData:	incbin		"art/logmr.ilbm.hi3"
+_LoghrImageData:	incbin		"art/loghr.ilbm.hi3"
