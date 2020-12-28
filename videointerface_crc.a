@@ -1,0 +1,1538 @@
+*videointerface.s
+*FASTAMIGA	equ	1
+
+			INCLUDE	"video.i"
+			INCLUDE	"vbserror.i"
+
+HBYTESSIZE	equ	44
+BLOCKSIZE	equ	(17*HBYTESSIZE)
+COPOFSDELT	equ	5*BLOCKSIZE
+
+			xref		_GfxBase
+
+			xdef		_VBS_VIInit,_VBS_WriteBackupHeader
+			xdef		_VBS_WriteMem,_VBS_RestoreScreen
+			xdef		_VBS_ReadMem,_VBS_Search			
+			xdef		_VBS_WriteTestPattern,_VBS_CheckPattern			
+			xdef		_VBS_FindMemLimit,_VBS_CheckInterval
+			xdef		_VBS_WriteErrorIndicator
+			xdef		_VBS_WaitFire
+			xdef		_VBS_ShowPlane,_VBS_ShowBlack
+			xdef		_VBS_CheckLoopback
+			xdef		_VBS_GetTimer,_VBS_ReadTimer,_VBS_FreeTimer
+			xdef		_VBS_VertBServer
+			xdef		_VBS_empty_pointer
+
+			xdef		_VBS_WriteFirstBlockSync,_VBS_SearchFirstBlockSync
+			xdef		_VBS_MemCmpL,_VBS_ShowCopperList
+			xdef		crctab8,lsb4table,msb4table
+			xdef		disable_initser,enable,vars,coppershort
+			xdef		copperlong,fillblock,clearblock,shownextplane,writeblack,writesync
+			xdef		waitvb,writecopperlist
+
+_VBS_ShowCopperList:
+showcopperlist:
+showcopperlist_nw:
+
+
+
+disable:
+			move.l	a6,-(sp)
+			move.l	4,a6
+			jsr		_LVODisable(a6)
+			move.l	(sp)+,a6
+			st.b		disabled(a6)
+			rts
+
+
+disable_initser:
+			bsr		disable
+			move.w	#(PERIODE-1)+$8000,serper(a5)
+			rts			
+enable:
+			move.l	a6,-(sp)
+			move.l	4,a6
+*			move.w	#INTF_SETCLR|INTF_MASTER,intena(a5)
+			jsr		_LVOEnable(a6)
+			move.l	(sp)+,a6
+			clr.b		disabled(a6)
+			rts
+
+waitvb_disabled:
+			move.w	#INTF_VERTB,intreq(a5)
+.wvb		move.w	intreqr(a5),d0
+			and.w		#INTF_VERTB,d0
+			beq.s		.wvb
+			move.w	#INTF_VERTB,intreq(a5)
+			rts
+
+waitvb:
+			tst.b		disabled(a6)
+			bne.s		waitvb_disabled
+			clr.b		vb_occurred(a6)
+.wvb		tst.b		vb_occurred(a6)
+			beq.s		.wvb
+			rts
+			
+
+_VBS_WriteBackupHeader:  ;(char *)
+headerblockp	equ	4
+			move.l	headerblockp(SP),d0
+			
+			movem.l	a2-a6/d2-d7,-(SP)
+			move.l	d0,a3
+			lea		$dff000,a5
+			lea		vars(pc),a6
+
+			
+			move.w	#TRACKSYNC,d0
+			bsr		writesync
+			bsr		waitvb
+			bsr		waitvb
+			move.w	#HEADERSYNC0,headersync(a6)
+
+			move.l	nextplane(a6),a0
+			move.l	a3,a1
+			bsr		writeheaderlist
+			bsr		shownextplane
+*			move.w	#TRACKSYNC,d0
+*			bsr		writesync
+			bsr		shownextplane 
+			
+			bsr		waitvb
+
+			movem.l	(SP)+,a2-a6/d2-d7
+			
+			moveq.l	#0,d0
+			rts
+			
+_VBS_WaitFire:
+			movem.l	a2-a6/d2-d7,-(SP)
+			lea		$dff000,a5
+			lea		vars(pc),a6
+
+			bsr		writeblack
+			bsr		waitfire	
+
+			movem.l	(SP)+,a2-a6/d2-d7
+			
+			moveq.l	#1,d0
+			rts
+
+
+clearblock:
+* a0.l ptr to bitplane segment
+* d1.w # scanlines
+		
+			moveq		#0,d0
+			subq.w	#1,d1
+.lus:		move.l	d0,(a0)+
+			move.l	d0,(a0)+
+			move.l	d0,(a0)+
+			move.l	d0,(a0)+
+			move.l	d0,(a0)+
+			move.l	d0,(a0)+
+			move.l	d0,(a0)+
+			move.l	d0,(a0)+
+			move.l	d0,(a0)+
+			move.l	d0,(a0)+
+			move.l	d0,(a0)+
+			dbra		d1,.lus
+			rts
+
+fillblock:
+* a0.l ptr to bitplane segment
+* d0.w data to be written 9 bits
+* d1.w # scanlines
+			
+			movem.l	d2/d3/a2/a3,-(sp)
+			lea.l		lsb4table(pc),a2
+			lea.l		msb4table(pc),a3
+
+			move.w	d0,d2
+			move.w	d1,d3
+			add.w		d3,d3
+			subq.w	#1,d3
+.rept:
+			move.w	d2,d0
+			wrevenbyte9
+			move.w	d2,d0
+			wroddbyte9
+			dbra		d3,.rept
+			
+			movem.l	(sp)+,d2/d3/a2/a3
+			rts
+			
+writeblock:
+* a0.l pointer to block in copper list/bit plane
+* a1.l pointer to data
+
+* uses blocknr(a6)
+			movem.l	d2-d7/a2-a4,-(sp)
+			lea.l		crctab8(pc),a4
+			lea.l		lsb4table(pc),a2
+			lea.l		msb4table(pc),a3
+
+			clr.w		d5
+			
+			move.w	headersync(a6),d0
+			wrevenbyte9
+			lea.l		12(a0),a0
+
+			clr.w		d0
+			move.b	blocknr(a6),d0
+			move.w	d0,d5
+*			move.b	(a4,d0.w),d5	
+			wrevenbyte8
+
+			clr.w		d0
+			move.b	blocknr+1(a6),d0
+			add.b		d0,d5
+*			eor.b		d0,d5
+*			move.b	(a4,d5.w),d5
+			wroddbyte8
+
+			moveq.l	#16-1,d7
+
+.writescanline:
+			clr.w		d0
+			move.b	(a1)+,d0
+			add.b		d0,d5
+*			eor.b		d0,d5
+*			move.b	(a4,d5.w),d5
+			
+			wrevenbyte8
+			
+			clr.w		d0
+			move.b	(a1)+,d0
+			add.b		d0,d5
+*			eor.b		d0,d5
+*			move.b	(a4,d5.w),d5
+			
+			wroddbyte8
+			clr.w		d0
+			move.b	(a1)+,d0
+			add.b		d0,d5
+*			eor.b		d0,d5
+*			move.b	(a4,d5.w),d5
+			
+			wrevenbyte8
+			
+			clr.w		d0
+			move.b	(a1)+,d0
+			add.b		d0,d5
+*			eor.b		d0,d5
+*			move.b	(a4,d5.w),d5
+			
+			wroddbyte8
+			dbra		d7,.writescanline
+
+			move.w	d5,d0
+			move.l	a0,a4
+			lea.l		(-(16*44+12+10+12))(a0),a0
+			wroddbyte8
+			move.l	a4,a0
+
+			movem.l	(sp)+,d2-d7/a2-a4
+			rts
+			
+			
+writeheaderlist:
+* a0.l coplist a1.l ptr to disk info block
+
+			movem.l	d2-d7/a2-a4,-(a7)
+
+			movea.l	a1,a4
+			move.l	a0,a3
+
+			move.w	#BLOCKSPERFRAME*17,d1
+			bsr		clearblock
+
+			move.w	#BACKUPSYNC,d0
+			lea		BLOCKSIZE*1(a3),a0
+			moveq.l	#17,d1
+			bsr		fillblock
+			
+			moveq		#2-1,d6
+			lea		BLOCKSIZE*3(a3),a0
+.writebackupinfoblock:
+			movea.l	a4,a1
+			clr.w		blocknr(a6)
+			bsr		writeblock
+			lea		BLOCKSIZE*4(a3),a0
+			dbra		d6,.writebackupinfoblock
+
+			lea.l		BLOCKSIZE*12(a3),a0
+			move.w	#TRACKSYNC,d0
+			moveq.l	#17,d1
+			bsr		fillblock
+
+.quit		movem.l	(a7)+,d2-d7/a2-a4
+			rts
+			
+_VBS_WriteMem:
+memptr	equ	4
+memsize	equ	8
+times		equ	12
+
+			movea.l	memptr(SP),a0
+			move.l	memsize(SP),d0
+			cmp.l		#64*16*50,d0
+			bge.s		zeergoed
+			move.l	#64*16*50,d0
+zeergoed:			
+			move.l	times(SP),d1
+			movem.l	d2-d7/a2-a6,-(sp)
+			lea.l		vars(pc),a6
+			lea.l		$dff000,a5
+			
+			move.w	d1,d7
+			subq.w	#1,d7
+			move.l	a0,a2
+			lea		(a0,d0.l),a3
+
+			move.w	#COPOFSDELT*2,d5
+.repeat:			
+			move.l	a2,writepos(a6)
+			clr.w		blocknr(a6)
+.nextframe:
+			move.l	nextplane(a6),a0
+			move.w	d5,d0
+			bsr		writecopperlist
+			
+			bsr		shownextplane
+			
+			cmp.l		writepos(a6),a3
+			bgt.s		.nextframe
+			sub.w		#COPOFSDELT,d5
+			dbra		d7,.repeat
+.kaas:
+			move.w	#TRACKSYNC,d0
+			bsr		writesync
+
+
+			eor.w		#HEADERSYNC1^HEADERSYNC0,headersync(a6)
+			
+			movem.l	(sp)+,d2-d7/a2-a6
+			moveq		#0,d0
+			rts
+			
+_VBS_WriteTestPattern:
+wtp_memptr	equ	4
+
+			movea.l	wtp_memptr(SP),a0
+			movem.l	d2-d7/a2-a6,-(sp)
+			lea.l		vars(pc),a6
+			lea.l		$dff000,a5
+			
+			move.w	#500-1,d7
+			move.l	a0,a2
+
+			move.l	a2,writepos(a6)
+			clr.w		blocknr(a6)
+
+			move.l	nextplane(a6),a0
+			move.w	#0,d0
+			bsr		writecopperlist
+			
+			bsr		shownextplane
+
+.repeat:
+			bsr		waitvb
+			dbra		d7,.repeat
+
+			move.w	#TRACKSYNC,d0
+			bsr		writesync
+
+			movem.l	(sp)+,d2-d7/a2-a6
+			moveq		#0,d0
+			rts
+					
+	
+writecopperlist:
+* d0.w offset in copperlist
+* a0.l primary coplist 
+
+* modifies: blocknr(a6) writepos(a6)
+
+			movem.l	d2-d7/a2-a4,-(a7)
+
+			lea		(BLOCKSPERFRAME*BLOCKSIZE)(a0),a3
+			lea		(a0,d0.w),a4
+			movea.l	writepos(a6),a2
+
+			moveq.l	#BLOCKSPERFRAME-1,d6
+.writeblock:
+			movea.l	a4,a0
+			movea.l	a2,a1
+			bsr		writeblock
+			lea		BYTESPERBLOCK(a2),a2
+			lea		BLOCKSIZE(a4),a4
+			cmp.l		a3,a4
+			blt.s		.noflip
+			lea		-BLOCKSPERFRAME*BLOCKSIZE(a3),a4
+.noflip:
+			addq.w	#1,blocknr(a6)
+			dbra		d6,.writeblock
+
+			move.l	a2,writepos(a6)
+				
+			movem.l	(a7)+,d2-d7/a2-a4
+			rts
+			
+			
+waitfire:
+.wd:		btst		#CIAB_GAMEPORT0,ciaa+ciapra
+			bne.s		.wd
+.wu:		btst		#CIAB_GAMEPORT0,ciaa+ciapra
+			beq.s		.wu
+			move.l	#$A00,d0	
+kaas		subq.l	#1,d0
+			bne.s		kaas
+			rts
+			
+_VBS_VIInit:
+vi_plane0	equ	4
+vi_plane1	equ	8
+vi_view0		equ	12
+vi_view1		equ	16
+
+			movea.l	sp,a0
+			movem.l	a2-a6/d2-d7,-(SP)
+			lea		$dff000,a5
+			lea		vars(pc),a6
+
+			move.l	vi_plane0(a0),actiplane(a6)
+			move.l	vi_plane1(a0),nextplane(a6)
+			move.l	vi_view0(a0),actiview(a6)
+			move.l	vi_view1(a0),nextview(a6)
+			clr.b		disabled(a6)
+			clr.b		in_vb(a6)
+			
+			move.l	actiplane(a6),blocksok(a6) ; should be big enough don't you think?
+
+.ready:	movem.l	(SP)+,a2-a6/d2-d7			
+			rts
+
+_VBS_RestoreScreen:
+			movem.l	a5/a6,-(SP)
+			lea		$dff000,a5
+			lea		vars(pc),a6
+			
+
+			bsr		restorescreen
+							
+*			move.w	#$c000,intena(a5)
+			movem.l	(sp)+,a5/a6
+			moveq.l	#0,d0
+			rts
+			
+restorescreen:
+			move.l	_GfxBase,a0
+
+			move.l	StartLijst(a0),cop1lc(a5)
+			bra		waitvb
+*			rts
+
+			
+copymem:	move.b	(a0)+,(a1)+
+memycpy:
+			dbra		d0,copymem
+			rts
+
+dataarea:	ds.b	BYTESPERBLOCK
+_VBS_Search:
+			movem.l	d2-d7/a2-a6,-(sp)
+			
+			lea.l		$dff000,a5
+			lea.l		vars(pc),a6
+			
+			bsr		disable_initser
+			bsr		coppershort
+			move.w	#HEADERSYNC0,headersync(a6)
+			lea		dataarea(pc),a2
+			movea.l	a2,a0
+			bsr		search
+			tst.w		d0
+			beq.s		.ok
+			sub.l		a2,a2
+.ok:
+			bsr		copperlong
+			bsr		enable
+			move.l	a2,d0
+			movem.l	(sp)+,d2-d7/a2-a6
+			rts
+
+search:
+*a0: dataarea
+			movem.l	d2-d7/a2-a4,-(sp)
+
+			lea.l		crctab8(pc),a2
+			lea.l		serdatr(a5),a4
+			lea.l		$bfe001,a3
+			move.w	#INTF_RBF,d3
+			
+			move.w	d3,intreq(a5)
+
+.again0:	moveq		#6,d6
+.bs:
+			move.w	(a4),d0
+			btst.b	d6,(a3)
+			beq.s		.break
+			add.w		d0,d0
+			bpl.s		.bs
+
+			move.w	d3,intreq(a5)
+			bra.s		.find20
+.break:
+			moveq		#2,d0
+			clr.l		(a0)
+			bra		.quit
+
+.find20:	move.w	#$1FF*2,d7
+			move.w	#20,d1
+.bs0:
+			move.w	(a4),d0
+			add.w		d0,d0
+			bpl.s		.bs0
+			move.w	d3,intreq(a5)
+
+			and.w		d7,d0
+			cmp.w		#BACKUPSYNC*2,d0
+			bne.s		.again0
+			dbra		d1,.bs0
+
+			move.w	d3,intreq(a5)
+			sf.b		second_time(a6)
+
+.readblk:moveq		#14,d7
+.hs0:
+			move.w	(a4),d0
+			btst		d7,d0
+			beq.s		.hs0
+			move.w	d3,intreq(a5)
+			and.w		#$1FF,d0
+*			cmp.w		#ERRORSYNC,d0
+*			beq		.error
+			cmp.w		#HEADERSYNC0,d0
+			bne.s		.hs0
+
+.checksum:
+			move.w	(a4),d5
+			btst.l	d7,d5
+			beq.s		.checksum
+			move.w	d3,intreq(a5)
+			clr.w		d1
+			move.b	d5,d1
+			swap		d1
+			clr.w		d5
+								
+			moveq		#0,d0
+.blocknr0:
+			move.w	(a4),d0
+			btst.l	d7,d0
+			beq.s		.blocknr0
+			move.w	d3,intreq(a5)
+
+			clr.w		d5
+			and.w		#$FF,d0
+			move.b	(a2,d0.w),d5
+.blocknr1:
+			move.w	(a4),d1
+			btst.l	d7,d1
+			beq.s		.blocknr1
+			move.w	d3,intreq(a5)
+
+			eor.b		d1,d5
+			move.b	(a2,d5.w),d5			
+			movea.l	a0,a1
+			
+			moveq		#BYTESPERBLOCK-1,d6
+.readbytes:
+			move.w	(a4),d0
+			btst.l	d7,d0
+			beq.s		.readbytes
+			move.w	d3,intreq(a5)
+			eor.b		d0,d5
+			move.b	(a2,d5.w),d5			
+			move.b	d0,(a1)+
+			dbra		d6,.readbytes
+
+			swap		d1
+			cmp.b		d1,d5
+			beq.s		.again1
+			tst.b		second_time(a6)
+			bne.s		.error
+			st.b		second_time(a6)
+			bra		.readblk
+
+.error:	clr.l		(a0)
+			moveq		#1,d0
+			bra.s		.quit
+			
+.again1:	moveq		#20,d1
+			move.w	#$1FF*2,d7
+.bs1:
+			move.w	(a4),d0
+			add.w		d0,d0
+			bpl.s		.bs1
+			move.w	d3,intreq(a5)
+
+			and.w		d7,d0
+			cmp.w		#TRACKSYNC*2,d0
+			bne.s		.again1
+			
+			dbra		d1,.bs1
+			moveq		#0,d0
+.quit:			
+			movem.l	(sp)+,d2-d7/a2-a4
+			rts
+
+
+
+writeblack:
+			move.l	nextplane(a6),a0
+			move.w	#17*BLOCKSPERFRAME,d1
+			bsr		clearblock
+			bra		shownextplane
+
+writesync:
+* D0: sync value to write
+			movem.l	d2,-(sp)
+			move.l	d0,d2
+			
+			move.l	nextplane(a6),a0
+			move.w	#17*BLOCKSPERFRAME,d1
+			move.w	d2,d0
+			bsr		fillblock
+			bsr		shownextplane
+			movem.l	(sp)+,d2
+			rts
+			
+shownextplane:
+			tst.b		in_vb(a6)
+			bne.s		.invb
+			
+			bsr		disable
+			clr.b		vb_occurred(a6)			
+			move.l	nextview(a6),a1
+			move.l	_GfxBase,a6
+			jsr		_LVOLoadView(a6)
+			lea.l		vars(pc),a6
+			bsr		enable
+.wvb:		tst.b		vb_occurred(a6)
+			beq.s		.wvb
+			bra.s		.exchange
+			
+.invb:	move.l	nextview(a6),a1
+			move.l	_GfxBase,a6
+			jsr		_LVOLoadView(a6)
+			lea.l		vars(pc),a6
+			
+.exchange:
+			move.l	actiview(a6),d0
+			move.l	nextview(a6),actiview(a6)
+			move.l	d0,nextview(a6)
+			move.l	actiplane(a6),d0
+			move.l	nextplane(a6),actiplane(a6)
+			move.l	d0,nextplane(a6)
+			rts			
+			
+_VBS_WriteErrorIndicator:
+			movem.l	d2-d7/a2-a6,-(sp)
+			lea		$dff000,a5
+			lea		vars(pc),a6
+			move.w	#ERRORSYNC,d0
+			bsr		writesync
+			
+			move.w	#50*3-1,d6
+.writeerrorframe:
+			bsr		waitvb
+			dbra		d6,.writeerrorframe
+			bsr		writeblack
+			movem.l	(sp)+,d2-d7/a2-a6
+			moveq		#0,d0
+			rts
+
+coppershort:		*fast list: minimum instructions						
+*			bsr		waitvb_disabled
+*			move.l	#cprshowplshort,cop1lc(a5)
+*			move.w	#0,copjmp1(a5)
+*			move.w	#$9000,bplcon0(a5)
+			
+*			move.w	dmaconr(a5),olddmacon(a6)
+*			move.w	#$07FF-(DMAF_DISK+DMAF_MASTER),dmacon(a5)
+*			move.w	#DMAF_SPRITE,dmacon(a5)
+*			bsr		killsprites
+			rts
+			
+copperlong:
+*			bsr		waitvb_disabled
+*			move.l	#cprshowpl,cop1lc(a5)
+*			move.w	#0,copjmp1(a5)
+
+*			move.w	olddmacon(a6),d0
+*			or.w		#DMAF_SETCLR,d0
+*			move.w	d0,dmacon(a5)
+
+*			move.w	#DMAF_SETCLR|DMAF_SPRITE,dmacon(a5)
+			rts			
+
+_VBS_ReadMem:
+rm_memptr	equ	4
+rm_memsize	equ	8
+
+			move.l	rm_memptr(sp),a0
+			move.l	rm_memsize(sp),d0
+			movem.l	d2-d7/a2-a6,-(sp)
+			
+			lea		$dff000,a5
+			lea		vars(pc),a6
+			lea.l		crctab8(pc),a2
+			move.l	a0,a3
+			move.l	d0,d3
+			bsr		disable_initser
+			
+			bsr		coppershort	
+			
+			
+			move.l	a3,a0
+			move.l	d3,d0
+			
+			move.l	d0,d4
+			move.l	d0,d1
+			add.l		#%111111,d1
+			lsr.l		#6,d1
+			move.w	d1,d7			;nblocksnok(a6)
+
+			addq.w	#3,d1
+			lsr.w		#2,d1			;(nblocks+3) div 4
+
+			movea.l	blocksok(a6),a3
+			movea.l	a3,a1
+.fillzero:
+			clr.l		(a1)+
+			dbra		d1,.fillzero
+			
+			lea.l		serdatr(a5),a4
+			move.w	#INTF_RBF,d3
+			move.w	d3,intreq(a5)
+			move.w	#$FFFF,d6;breakval(a6)		impossible value
+			move.w	#100,track(a6)
+.hs0:
+			move.w	(a4),d0
+.hsq:
+			btst		#14,d0
+			beq.s		.hs0
+			move.w	d3,intreq(a5)
+			and.w		#$1FF,d0
+*			cmp.w		#ERRORSYNC,d0
+*			beq		.valuefound
+			cmp.w		d6,d0;breakval(a6),d0
+			beq		.valuefound
+			cmp.w		headersync(a6),d0
+			bne.s		.hs0
+
+.checksum:
+			move.w	(a4),d5
+			btst.l	#14,d5
+			beq.s		.checksum
+			move.w	d3,intreq(a5)
+			clr.w		d1
+			move.b	d5,d1
+			swap		d1
+*			move.w	#TRACKSYNC,breakval(a6)
+						
+			moveq		#0,d0
+.blocknr0:
+			move.w	(a4),d0
+			btst.l	#14,d0
+			beq.s		.blocknr0
+			move.w	d3,intreq(a5)
+			clr.w		d5
+			and.w		#$FF,d0
+			move.b	(a2,d0),d5
+			lsl.w		#8,d0
+.blocknr1:
+			move.w	(a4),d1
+			btst.l	#14,d1
+			beq.s		.blocknr1
+			move.w	d3,intreq(a5)
+			eor.b		d1,d5
+			move.b	(a2,d5.w),d5
+			
+			move.b	d1,d0
+			move.w	d0,d2
+			
+			asl.l		#6,d0
+			cmp.l		d4,d0
+			bhs.s		.hs0
+			
+			tst.b		(a3,d2.w)
+			bne.s		.hs0
+*		move.w	#$FF0,color(a5)
+			
+			lea.l		(a0,d0.l),a1
+			
+			swap		d2
+			move.w	#(BYTESPERBLOCK/4)-1,d2
+			move.w	#14,d1
+.readbytes:
+			move.w	(a4),d0
+			btst.l	d1,d0
+			beq.s		.readbytes
+			move.w	d3,intreq(a5)
+			eor.b		d0,d5
+			move.b	(a2,d5.w),d5
+			move.b	d0,(a1)+
+.rb1:
+			move.w	(a4),d0
+			btst.l	d1,d0
+			beq.s		.rb1
+			move.w	d3,intreq(a5)
+			eor.b		d0,d5
+			move.b	(a2,d5.w),d5
+			move.b	d0,(a1)+
+.rb2:
+			move.w	(a4),d0
+			btst.l	d1,d0
+			beq.s		.rb2
+			move.w	d3,intreq(a5)
+			eor.b		d0,d5
+			move.b	(a2,d5.w),d5
+			move.b	d0,(a1)+
+.rb3:
+			move.w	(a4),d0
+			btst.l	d1,d0
+			beq.s		.rb3
+			move.w	d3,intreq(a5)
+			eor.b		d0,d5
+			move.b	(a2,d5.w),d5
+			move.b	d0,(a1)+
+			dbra		d2,.readbytes
+	
+			swap		d2
+			swap		d1
+			cmp.b		d1,d5
+*		sne		d0
+*		ext.w		d0
+*		move.w	d0,color(a5)
+			bne		.hs0
+			st.b		(a3,d2.w)
+			subq.w	#1,d7				;nblocksnok(a6)
+			beq		.chunkread
+			subq.w	#1,track(a6)
+			bne		.hs0
+			move.w	#TRACKSYNC,d6;breakval(a6)
+			move.w	(a4),d0
+			bra		.hsq
+.chunkread:			
+			eor.w		#HEADERSYNC0^HEADERSYNC1,headersync(a6)
+			moveq		#EOK,d2
+			tst.w		d7					;nblocksnok(a6)
+			beq.s		.quit
+			bne.s		.errorfound
+			
+.valuefound:
+			moveq		#10-1,d2
+.readb:
+			move.w	(a4),d1
+			btst		#14,d1
+			beq.s		.readb
+			move.w	d3,intreq(a5)
+			and.w		#$1FF,d1
+			cmp.w		d0,d1
+			bne		.hs0
+			dbra		d2,.readb
+			cmp.w		#TRACKSYNC,d0
+			beq.s		.chunkread
+.errorfound:			
+			moveq		#EOK+0*EVIDEOREAD,d2
+.quit:		
+			bsr		copperlong
+			
+			bsr		enable
+			move.l	d2,d0
+			movem.l	(sp)+,d2-d7/a2-a6
+			rts				
+
+_VBS_CheckPattern:
+cp_memptr		equ	4
+cp_memsize		equ	8
+cp_errspecpt	equ	12
+es_blocks		equ 	0
+es_bytes			equ	4
+es_zeros			equ	8
+es_ones			equ	12
+
+			move.l	cp_memptr(sp),a0
+			move.l	cp_memsize(sp),d0
+			move.l	cp_errspecpt(sp),a1
+
+			movem.l	d2-d7/a2-a6,-(sp)
+			
+			lea		$dff000,a5
+			lea		vars(pc),a6
+			clr.w		blocknr(a6)
+			clr.w		nblocksnok(a6)
+			
+			move.l	a1,errspecpt(a6)
+			lea.l		(a0,d0.l),a3
+			
+			lea.l		crctab8(pc),a2
+			move.l	a0,d3
+			move.l	d0,d4
+			bsr		disable_initser
+			
+			move.w	#DMAF_COPPER|DMAF_RASTER,dmacon(a5)
+*			bsr		coppershort	
+			
+			
+			move.l	d3,a0
+			move.l	d4,d0
+			
+			lea.l		serdatr(a5),a4
+			moveq.l	#0,d0
+			moveq.l	#0,d1
+			moveq.l	#0,d2
+			moveq.l	#0,d3
+			moveq.l	#0,d4			aantal 0->1
+			moveq.l	#0,d5	
+			moveq.l	#0,d6
+			moveq.l	#0,d7
+			move.l	d0,a1			aantal 1->0
+			
+			
+			move.w	#INTF_RBF,d3
+			move.w	d3,intreq(a5)
+			move.w	#$FFFF,breakval(a6)		impossible value
+
+.hs0:
+			move.w	(a4),d0
+			btst		#14,d0
+			beq.s		.hs0
+			move.w	d3,intreq(a5)
+			and.w		#$1FF,d0
+*			cmp.w		#ERRORSYNC,d0
+*			beq		.valuefound
+			cmp.w		breakval(a6),d0
+			beq		.valuefound
+			cmp.w		headersync(a6),d0
+			bne.s		.hs0
+
+.checksum:
+			move.w	(a4),d5
+			btst.l	#14,d5
+			beq.s		.checksum
+			move.w	d3,intreq(a5)
+			clr.w		d1
+			move.b	d5,d1
+			swap		d1
+			move.w	#TRACKSYNC,breakval(a6)
+						
+			moveq		#0,d0
+.blocknr0:
+			move.w	(a4),d0
+			btst.l	#14,d0
+			beq.s		.blocknr0
+			move.w	d3,intreq(a5)
+			clr.w		d5
+			and.w		#$FF,d0
+			move.b	(a2,d0),d5
+.blocknr1:
+			move.w	(a4),d1
+			btst.l	#14,d1
+			beq.s		.blocknr1
+			move.w	d3,intreq(a5)
+			eor.b		d1,d5
+			move.b	(a2,d5.w),d5
+			ext.w		d1
+			lsl.w		#6,d1
+			lea		(a0,d1.w),a3
+			
+			clr.w		d1
+			moveq		#BYTESPERBLOCK-1,d7
+			moveq		#0,d2
+.readbytes:
+			move.w	(a4),d0
+			btst.l	#14,d0
+			beq.s		.readbytes
+			move.w	d3,intreq(a5)
+			eor.b		d0,d5
+			move.b	(a2,d5.w),d5
+			move.b	(a3)+,d1
+		
+*			ifd		FASTAMIGA
+*			
+*			move.b	d1,d2
+*			not.b		d1
+*			and.b		d0,d1
+*			not.b		d0
+*			and.b		d2,d0
+*			and.w		#$FF,d0
+*			
+*			move.b	.aantalenen(pc,d1.w),d2	;aantal 0->1
+*			add.l		d2,d4
+*			move.b	.aantalenen(pc,d0.w),d2 ;aantal 1->0
+*			add.l		d2,a1
+*			
+*			endc
+			
+			eor.b		d0,d1
+			sne.b		d2
+			neg.b		d2
+			add.l		d2,d6
+			
+			dbra		d7,.readbytes
+*			bra		.verder
+*.aantalenen:			
+*			dc.b  0, 1, 1, 2, 1, 2, 2, 3, 1, 2, 2, 3, 2, 3, 3, 4, 1, 2, 2, 3, 2, 3, 3, 4
+*			dc.b  2, 3, 3, 4, 3, 4, 4, 5, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5
+*			dc.b  2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 1, 2, 2, 3, 2, 3, 3, 4
+*			dc.b  2, 3, 3, 4, 3, 4, 4, 5, 2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6
+*			dc.b  2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6
+*			dc.b  4, 5, 5, 6, 5, 6, 6, 7, 1, 2, 2, 3, 2, 3, 3, 4, 2, 3, 3, 4, 3, 4, 4, 5
+*			dc.b  2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 2, 3, 3, 4, 3, 4, 4, 5
+*			dc.b  3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7
+*			dc.b  2, 3, 3, 4, 3, 4, 4, 5, 3, 4, 4, 5, 4, 5, 5, 6, 3, 4, 4, 5, 4, 5, 5, 6
+*			dc.b  4, 5, 5, 6, 5, 6, 6, 7, 3, 4, 4, 5, 4, 5, 5, 6, 4, 5, 5, 6, 5, 6, 6, 7
+*			dc.b  4, 5, 5, 6, 5, 6, 6, 7, 5, 6, 6, 7, 6, 7, 7, 8
+*.verder:
+			swap		d1
+			cmp.b		d1,d5
+			sne.b		d2
+			neg.b		d2
+			add.w		d2,nblocksnok(a6)			;aantal foute blokken
+			addq.w	#1,blocknr(a6)				;totaal gelezen
+			bra		.hs0
+			
+.valuefound:
+			moveq		#10-1,d2
+.readb:
+			move.w	(a4),d1
+			btst		#14,d1
+			beq.s		.readb
+			move.w	d3,intreq(a5)
+			and.w		#$1FF,d1
+			cmp.w		d0,d1
+			bne		.hs0
+			dbra		d2,.readb
+*			cmp.w		#TRACKSYNC,d0
+*			beq.s		.chunkread
+
+.quit:		
+*			bsr		copperlong
+			move.w	#DMAF_SETCLR|DMAF_COPPER|DMAF_RASTER,dmacon(a5)
+			
+			bsr		enable
+			move.l	errspecpt(a6),a0
+			move.w	nblocksnok(a6),d0
+			move.l	d0,es_blocks(a0)
+			ifd		FASTAMIGA
+			move.l	d4,es_zeros(a0)
+			move.l	a1,es_ones(a0)
+			endc
+			move.l	d6,es_bytes(a0)			
+			move.w	blocknr(a6),d0
+			ext.l		d0
+			movem.l	(sp)+,d2-d7/a2-a6
+			rts				
+
+
+
+_VBS_CheckInterval:
+ci_start	equ		4
+ci_len	equ		8
+
+			moveq.l	#0,d0
+			move.l	ci_len(sp),d1
+			beq.s		.zerolength
+			move.l	ci_start(sp),d0
+			
+			add.l		d0,d1
+			subq.l	#1,d1
+			lsr.l		#6,d1
+			
+			lsr.l		#6,d0
+			sub.l		d0,d1
+			movea.l	d0,a0
+			lea		vars(PC),a1
+			add.l		blocksok(a1),a0
+			
+.test:	tst.b		(a0)+
+			dbeq		d1,.test
+
+			seq.b		d0
+			ext.w		d0
+			ext.l		d0
+.zerolength:
+			rts
+			
+_VBS_FindMemLimit:
+			move.l	blocksok+vars(PC),a0
+			moveq.l	#-64,d0
+			moveq.l	#64,d1
+.test		add.l		d1,d0
+			tst.b		(a0)+
+			bne.s		.test
+			rts
+		
+		
+_VBS_ShowBlack:
+			movem.l	a5/a6,-(sp)
+			lea.l		vars(pc),a6
+			lea		$dff000,a5
+			bsr		writeblack
+			movem.l	(sp)+,a5/a6
+			rts
+
+_VBS_WriteFirstBlockSync:
+			movem.l	a5/a6,-(sp)
+			lea		vars(pc),a6
+			move.w	#FIRSTBLOCKSYNC,d0
+			bsr		writesync
+			move.w	#TRACKSYNC,d0
+			bsr		writesync
+			movem.l	(sp)+,a5/a6
+			rts
+
+_VBS_SearchFirstBlockSync:
+			movem.l	d2-d7/a2-a6,-(sp)
+			
+			lea.l		$dff000,a5
+			lea.l		vars(pc),a6
+			
+			bsr		disable_initser
+
+			lea.l		serdatr(a5),a4
+			lea.l		$bfe001,a3
+			moveq		#6,d6
+			move.w	#INTF_RBF,intreq(a5)
+
+.again0:
+.bs:
+			move.w	(a4),d0
+			btst.b	d6,(a3)
+			beq.s		.break
+			add.w		d0,d0
+			bpl.s		.bs
+
+			move.w	#INTF_RBF,intreq(a5)
+			bra.s		.find20
+.break:
+			moveq		#-1,d0
+			bra		.quit
+
+.find20:
+			move.w	#20,d1
+.bs0:
+			move.w	(a4),d0
+			add.w		d0,d0
+			bpl.s		.bs0
+			move.w	#INTF_RBF,intreq(a5)
+
+			and.w		#$1FF*2,d0
+			cmp.w		#FIRSTBLOCKSYNC*2,d0
+			bne.s		.again0
+			dbra		d1,.bs0
+
+.ok:
+			
+			bsr		enable
+			moveq.l	#0,d0
+.quit:
+			movem.l	(sp)+,d2-d7/a2-a6
+			rts
+
+		
+_VBS_ShowPlane:
+			ifd KOEIEN
+sp_plane		equ		4
+sp_width		equ		8
+sp_height	equ		12
+sp_dxoffset	equ		16
+sp_dyoffset	equ		20
+sp_modes		equ		24
+sp_color0	equ		28
+sp_color1	equ		32
+
+			move.l	sp,a0		
+			movem.l	d2-d7/a2-a6,-(sp)
+		
+			lea		$dff000,a5
+			lea		vars(pc),a6
+		
+			move.l	sp_color0(a0),d0
+			move.w	d0,showpl_color0+2
+			move.l	sp_color1(a0),d0
+			move.w	d0,showpl_color1+2
+			move.l	sp_plane(a0),d0
+			move.w	d0,showpl_plptl+2
+			move.w	d0,showpls_plptl+2
+			swap		d0
+			move.w	d0,showpl_plpth+2
+			move.w	d0,showpls_plpth+2
+			move.l	sp_modes(a0),d1
+			move.w	d1,showpl_bplcon0+2
+			and.w		#$8000,d1			;HIRES
+			beq.s		.lores
+.hires:	move.l	sp_dxoffset(a0),d1
+			sub.w		#9,d1
+			moveq		#7,d4
+			and.w		d1,d4
+			lsr.w		#1,d1
+			and.w		#$fffc,d1
+			move.l	sp_width(a0),d2
+			move.w	d2,d3
+			lsr.w		#1,d3
+			lsr.w		#2,d2
+			sub.w		#8,d2
+			add.w		d1,d2
+			bra.s		.datafetch
+.lores:	move.l	sp_dxoffset(a0),d1
+			sub.w		#17,d1
+			moveq		#15,d4
+			and.w		d1,d4
+			lsr.w		#1,d1
+			and.w		#$fff8,d1
+			move.l	sp_width(a0),d2
+			move.w	d2,d3
+			lsr.w		#1,d2
+			sub.w		#8,d2
+			add.w		d1,d2
+.datafetch:
+			move.w	d4,d0
+			lsl.w		#4,d0
+			or.w		d4,d0
+			move.w	d0,showpl_bplcon1+2
+			move.w	d1,showpl_ddfstrt+2
+			move.w	d2,showpl_ddfstop+2
+			move.l	sp_dyoffset(a0),d0
+			lsl.w		#8,d0
+			move.l	sp_dxoffset(a0),d1
+			move.b	d1,d0
+			move.w	d0,showpl_diwstrt+2
+
+			move.l	sp_dyoffset(a0),d0
+			add.l		sp_height(a0),d0
+*			and.l		#$ff,d0
+			lsl.w		#8,d0
+			add.w		d3,d1
+			move.b	d1,d0
+			move.w	d0,showpl_diwstop+2
+
+			move.l	sp_dyoffset(a0),d0
+			add.l		sp_height(a0),d0
+			move.b	d0,d1
+			lsl.w		#8,d1
+			add.w		#61,d1
+			move.w	#1,showpl_cwait1
+			cmp.w		#256,d0
+			blt.s		.laag
+			move.w	#$FFDF,showpl_cwait1
+.laag:	move.w	d1,showpl_cwait2
+
+			move.l	#cprshowpl,d0
+			bsr		showcopperlist
+
+			movem.l	(sp)+,d2-d7/a2-a6
+			endc
+			moveq		#0,d0
+			rts
+
+_VBS_CheckLoopback:
+
+			movem.l	d2-d7/a2-a6,-(sp)
+			lea		$dff000,a5
+			lea		vars(pc),a6
+
+			
+			move.w	#TRACKSYNC,d0
+			bsr		writesync
+			bsr		disable_initser
+
+*wwww:
+*			btst #6,$bfe001
+*			beq.s wwww
+*wwww2:
+*			btst #6,$bfe001
+*			bne.s wwww2
+
+			bsr		waitvb
+			bsr		waitvb
+			lea.l		serdatr(a5),a4
+			move.w	#INTF_RBF|INTF_VERTB,intreq(a5)
+
+			moveq		#0,d2			;FALSE
+			move.w	#INTF_RBF,d3
+
+			move.w	#2*$ff,d5
+
+.bs0:
+			move.w	(a4),d0
+			moveq		#INTF_VERTB,d1
+			and.w		intreqr(a5),d1
+			bne.s		.error
+			add.w		d0,d0
+			bpl.s		.bs0
+;			move.w	d0,(a3)+
+			move.w	d3,intreq(a5)
+
+			move.w	#500,d4
+.bs1:
+			move.w	(a4),d0
+			moveq		#INTF_VERTB,d1
+			and.w		intreqr(a5),d1
+			bne.s		.error
+			add.w		d0,d0
+			bpl.s		.bs1
+;			move.w	d0,(a3)+
+			move.w	d3,intreq(a5)
+			and.w		d5,d0
+			cmp.w		#TRACKSYNC*2,d0
+			bne.s		.error
+			dbra		d4,.bs1
+			moveq		#1,d2
+.error:
+			bsr		enable
+			bsr		writeblack
+			
+			move.l	d2,d0
+			movem.l	(sp)+,d2-d7/a2-a6
+			rts
+
+_VBS_VertBServer:
+			lea		vars(pc),a0
+			addq.l	#1,countvertb(a0)
+			st.b		vb_occurred(a0)
+			st.b		in_vb(a0)
+			move.l	vb_routine(a0),d0
+			beq.s		.noroutine
+			move.l	d0,a1
+			jsr		(a1)
+.noroutine:
+			sf.b		vars+in_vb
+			moveq.l	#0,d0			;set Z-bit: continue to process other vb-servers
+			rts
+
+_VBS_GetTimer:
+*			lea		ciaa,a0			
+*			bset		#CIACRBB_ALARM,ciacrb(a0)
+*			move.b	#$4,ciaicr(a0)
+			rts
+			
+_VBS_ReadTimer:
+*			lea		ciaa,a0			
+*			moveq		#0,d0
+*			move.b	ciatodhi(a0),d0
+*			swap		d0
+*			move.b	ciatodmid(a0),d0
+*			lsl.w		#8,d0
+*			move.b	ciatodlow(a0),d0
+			move.l	vars+countvertb(pc),d0
+			rts
+
+_VBS_FreeTimer:
+*			lea		ciaa,a0			
+*			bclr		#CIACRBB_ALARM,ciacrb(a0)
+*			move.b	#$84,ciaicr(a0)
+			rts
+
+
+_VBS_MemCmpL:
+cmpl_p0	equ		4
+cmpl_p1	equ		8
+cmpl_nl	equ		12
+
+			move.l	sp,a0
+			move.l	d2,-(sp)
+			move.l	cmpl_nl(a0),d1
+			move.l	cmpl_p1(a0),a1
+			move.l	cmpl_p0(a0),a0
+			
+			moveq		#-1,d0
+			moveq		#7,d2
+			and.l		d1,d2
+			beq.s		dovgl8
+			subq.w	#1,d2
+vglw:		cmpm.l	(a0)+,(a1)+
+			dbeq		d2,vglw
+			bne.s		cmpquit
+dovgl8:			
+			lsr.l		#3,d1
+			beq.s		cmpready
+			subq.w	#1,d1
+vgl8:		cmpm.l	(a0)+,(a1)+
+			bne.s		cmpquit
+			cmpm.l	(a0)+,(a1)+
+			bne.s		cmpquit
+			cmpm.l	(a0)+,(a1)+
+			bne.s		cmpquit
+			cmpm.l	(a0)+,(a1)+
+			bne.s		cmpquit
+			cmpm.l	(a0)+,(a1)+
+			bne.s		cmpquit
+			cmpm.l	(a0)+,(a1)+
+			bne.s		cmpquit
+			cmpm.l	(a0)+,(a1)+
+			bne.s		cmpquit
+			cmpm.l	(a0)+,(a1)+
+			dbeq		d1,vgl8
+			bne.s		cmpquit
+cmpready:moveq		#0,d0
+cmpquit:	move.l	(sp)+,d2
+			rts
+						
+			cnop		0,4			
+lsb4table:
+			incbin	"incbin/lsb4table"
+msb4table:
+			incbin	"incbin/msb4table"
+
+
+crctab8:
+			incbin	"incbin/crctab8"
+
+
+					
+vars:		ds.b		VARIABLES_SIZEOF
+			
+			section	bytes,DATA_C
+			xdef		EVENOFFSET,ODDOFFSET		
+			xdef		TRACKSYNCOFFSET,BACKUPSYNCOFFSET
+			xdef		HEADEROFFSET0,HEADEROFFSET1
+			xdef		EMPTYOFFSET
+						
+
+evenbytes:
+EVENOFFSET			equ		*-evenbytes
+						incbin	"incbin/evenbytes"
+
+ODDOFFSET			equ		*-evenbytes
+						incbin	"incbin/oddbytes"
+
+HEADEROFFSET0		equ		*-evenbytes
+		;0x02 0xCC met 9e bit ook wit
+						dc.b		$FF,$FF,0,$FF,$FF,$FF,$FF,$FF,$FF,$FF,0,0,0,0,0,0
+HEADEROFFSET1		equ		*-evenbytes
+						dc.b		$FF,$FF,$FF,0,0,$FF,$FF,0,0,$FF,0,0,0,0,0,0
+
+BACKUPSYNCOFFSET	equ		*-evenbytes
+		;0x33 met 9e bit ook wit
+						dc.b		$FF,0,0,$ff,$ff,0,0,$ff,$ff,$ff,0,0,0,0,0,0
+						dc.b		0,$FF,0,0,$ff,$ff,0,0,$ff,$ff,$ff,0,0,0,0,0
+
+TRACKSYNCOFFSET	equ		*-evenbytes
+		;0x55 met 9e bit ook wit
+						dc.b		$FF,0,$ff,0,$ff,0,$ff,0,$ff,$ff,0,0,0,0,0,0
+						dc.b		0,$FF,0,$ff,0,$ff,0,$ff,0,$ff,$ff,0,0,0,0,0
+
+EMPTYOFFSET			equ		*-evenbytes
+						ds.w		16
+
+CHIPSIZE				equ	*-evenbytes
+evenbytes2:			;kopie van voorafgaande
+						incbin	"incbin/evenbytes"
+						incbin	"incbin/oddbytes"
+						dc.b		$FF,$FF,0,$FF,$FF,$FF,$FF,$FF,$FF,$FF,0,0,0,0,0,0
+						dc.b		$FF,$FF,$FF,0,0,$FF,$FF,0,0,$FF,0,0,0,0,0,0
+
+		;0x33 met 9e bit ook wit
+						dc.b		$FF,0,0,$ff,$ff,0,0,$ff,$ff,$ff,0,0,0,0,0,0
+						dc.b		0,$FF,0,0,$ff,$ff,0,0,$ff,$ff,$ff,0,0,0,0,0
+		;0x55 met 9e bit ook wit
+						dc.b		$FF,0,$ff,0,$ff,0,$ff,0,$ff,$ff,0,0,0,0,0,0
+						dc.b		0,$FF,0,$ff,0,$ff,0,$ff,0,$ff,$ff,0,0,0,0,0
+						ds.w		16
+						
+betweenblocks:		;4 keer 0x55 met 9e bit ook wit
+						dc.b		$FF,0,$ff,0,$ff,0,$ff,0,$ff,$ff,0
+						dc.b		$FF,0,$ff,0,$ff,0,$ff,0,$ff,$ff,0
+						dc.b		$FF,0,$ff,0,$ff,0,$ff,0,$ff,$ff,0
+						dc.b		$FF,0,$ff,0,$ff,0,$ff,0,$ff,$ff,0
+
+BETWEENSIZE			equ		*-betweenblocks
+
+errorindicator:	;4 keer 0x66 met 9e bit ook wit
+						dc.b		$FF,$ff,0,0,$ff,$ff,0,0,$ff,$ff,0
+						dc.b		$FF,$ff,0,0,$ff,$ff,0,0,$ff,$ff,0
+						dc.b		$FF,$ff,0,0,$ff,$ff,0,0,$ff,$ff,0
+						dc.b		$FF,$ff,0,0,$ff,$ff,0,0,$ff,$ff,0
+
+ERRORINDSIZE		equ		*-errorindicator
+
+firstblock: 		;4 keer 0x44 met 9e bit ook wit
+						dc.b		$FF,$ff,$ff,0,$ff,$ff,$ff,0,$ff,$ff,0
+						dc.b		$FF,$ff,$ff,0,$ff,$ff,$ff,0,$ff,$ff,0
+						dc.b		$FF,$ff,$ff,0,$ff,$ff,$ff,0,$ff,$ff,0
+						dc.b		$FF,$ff,$ff,0,$ff,$ff,$ff,0,$ff,$ff,0
+
+FIRSTBLOCKSIZE		equ		*-firstblock
+
+
+_VBS_empty_pointer:
+						dc.w		0,0,0,0,0,0,0,0	
+
+			section	copper,DATA_C
+			xref		cprimport0,cprimport1,cprend0,cprend1
+			xdef		cprblack,cprerror,cprbetween,cprfirstblock
+			xdef		_VBS_cprstart,_VBS_cprblack,_VBS_cprbetween
+			
+_VBS_cprstart:
+insaddh:	CMOVE		0,cop1lc
+insaddl:	CMOVE		0,cop1lc+2
+			CMOVE		0,copjmp1			
+
+_VBS_cprblack:
+cprblack:
+			CWAIT		$12,VSTART
+			CMOVE		$0F0,color
+cend:						
+cprblackend:
+			CMOVE		0,cop1lc
+			CMOVE		0,cop1lc+2
+			CWAIT		255,255
+
+_VBS_cprbetween:
+cprbetween:
+			CMOVE		0,bpl1mod
+			CMOVE		0,bpl2mod
+			CWAIT		30,VSTART+2
+betweenplpt:
+			CMOVE		0,bplpt
+			CMOVE		0,bplpt+2
+			CWAIT		100,VSTART+2
+			CMOVE		-44,bpl1mod
+			CMOVE		-44,bpl2mod
+cprbetweenend:
+			CMOVE		0,cop1lc
+			CMOVE		0,cop1lc+2
+			CWAIT		255,255
+
+cprfirstblock:
+			CWAIT		$12,VSTART
+firstblockplpt:
+			CMOVE		0,bplpt
+			CMOVE		0,bplpt+2
+			CMOVE		-44,bpl1mod
+			CMOVE		-44,bpl2mod
+cprfbend:
+			CMOVE		0,cop1lc
+			CMOVE		0,cop1lc+2
+			CWAIT		255,255
+
+cprerror:
+			CWAIT		$12,VSTART
+errorplpt:
+			CMOVE		0,bplpt
+			CMOVE		0,bplpt+2
+			CMOVE		-44,bpl1mod
+			CMOVE		-44,bpl2mod
+cprerrorend:
+			CMOVE		0,cop1lc
+			CMOVE		0,cop1lc+2
+			CWAIT		255,255
+			
+			end
+			
+

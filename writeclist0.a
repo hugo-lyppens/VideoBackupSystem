@@ -1,0 +1,71 @@
+
+			section	copper,DATA_C
+			xdef		cprimport0
+
+			INCLUDE	"video.i"
+			
+WAITX		equ		(51-2)
+SCRSIZE	equ		(WIDTH/8)*HEIGHT
+
+
+HINIT		macro
+HC_YPOS	set		\1
+			endm
+			
+HBYTES	macro
+			CWAIT		WAITX,HC_YPOS
+			CMOVE		$1f00,bplpt+2
+			CWAIT		WAITX+40,HC_YPOS
+			CMOVE		$1f80,bplpt+2
+			CWAIT		WAITX+40+48,HC_YPOS
+			CMOVE		$1fc0,bplpt+2
+			CWAIT		WAITX+40+48+40,HC_YPOS
+			CMOVE		$1f40,bplpt+2
+			CWAIT		$e0,HC_YPOS
+HC_YPOS	set		HC_YPOS+1
+			endm
+
+
+cprimport0:
+			CMOVE		0,bplpt
+			CMOVE		0,sprpt
+			CMOVE		0,sprpt+2
+			CMOVE		0,sprpt+4
+			CMOVE		0,sprpt+6
+			CMOVE		0,sprpt+8
+			CMOVE		0,sprpt+10
+			CMOVE		0,sprpt+12
+			CMOVE		0,sprpt+14
+			CMOVE		0,sprpt+16
+			CMOVE		0,sprpt+18
+			CMOVE		0,sprpt+20
+			CMOVE		0,sprpt+22
+			CMOVE		0,sprpt+24
+			CMOVE		0,sprpt+26
+			CMOVE		0,sprpt+28
+			CMOVE		0,sprpt+30
+
+			CWAIT		0,12
+			CMOVE		$1000,bplcon0
+			CMOVE		(((HSTART-17)&15)<<4)|((HSTART-17)&15),bplcon1
+			CMOVE		0,bplcon2
+			CMOVE		0,bpl1mod
+			CMOVE		0,bpl2mod
+			CMOVE		(((HSTART-17)/2)&$FFF8),ddfstrt
+			CMOVE		(((HSTART-17)/2)&$FFF8)+(WIDTH/2)-8,ddfstop
+			CMOVE		HSTART|(VSTART<<8),diwstrt
+			CMOVE		((HSTART+WIDTH)&255)|(((VSTART+17*BLOCKSPERFRAME)&255)<<8),diwstop
+			CMOVE		BLACK,color
+			CMOVE		WHITE,color+2
+			
+			HINIT		VSTART
+cprdata:
+			INCLUDE	"hbytes272.a"			
+			
+*			CWAIT		$de,255
+*			CWAIT		60,(VSTART+17*BLOCKSPERFRAME)&255
+*			CMOVE		0,bplcon0			
+			CWAIT		255,255
+
+			end
+

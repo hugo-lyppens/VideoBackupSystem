@@ -1,0 +1,15 @@
+.k MODE
+
+If <MODE> eq "NTSC"
+   echo >tvsystem.i "NTSC EQU 1"
+Else
+   echo >tvsystem.i "PAL EQU 1"
+EndIf
+type tvsystem.i
+GenIm2 -l -oObj/floppybackup.o    floppybackup.s
+GenIm2 -l -oObj/floppyrestore.o   floppyrestore.s
+GenIm2 -l -oObj/writeclist.o      writeclist.s
+GenIm2 -l -oObj/videointerface.o  videointerface.s
+GenIm2 -l -oObj/strcmpnocase.o    strcmpnocase.s
+GenIm2 -l -oObj/image.o           image.s
+

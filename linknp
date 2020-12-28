@@ -1,0 +1,2 @@
+BLink DEFINE _printf=_stub DEFINE _puts=_stub WITH withvbs LIB lib:lc.lib lib:amiga.lib ND SC SD VERBOSE FANCY
+

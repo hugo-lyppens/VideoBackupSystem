@@ -1,0 +1,74 @@
+
+			xdef _StrCmpNoCase,_FastMemCmp
+			
+			
+_StrCmpNoCase:
+s1			equ	4
+s2			equ	8
+			
+			move.l	s1(sp),a0
+			move.l	s2(sp),a1
+			move.l	d2,-(sp)
+.nextchar:
+			move.b	(a0)+,d0
+			cmp.b		#'Z',d0
+			bgt.s		.noupper0
+			cmp.b		#'A',d0
+			blt.s		.noupper0
+			add.b		#'a'-'A',d0
+.noupper0:
+			move.b	(a1)+,d1
+			cmp.b		#'Z',d1
+			bgt.s		.noupper1
+			cmp.b		#'A',d1
+			blt.s		.noupper1
+			add.b		#'a'-'A',d1
+.noupper1:
+			move.b	d0,d2
+			sub.b		d1,d2
+			bne.s		.klaar
+			tst.b		d0
+			beq.s		.klaar
+			tst.b		d1
+			bne.s		.nextchar
+.klaar:
+			move.b	d2,d0
+			ext.w		d0
+			ext.l		d0
+			move.l	(sp)+,d2
+			rts
+			
+_FastMemCmp:
+buf0		equ	4
+buf1		equ	8
+len		equ	12
+
+			move.l	buf0(sp),a0
+			move.l	buf1(sp),a1
+			move.l	len(sp),d0
+
+			subq.l	#4,d0
+			bmi.s		.restant
+.looplong:
+			cmpm.l	(a0)+,(a1)+
+			bne.s		.finish
+			subq.l	#4,d0
+			bpl.s		.looplong
+.restant:
+			addq.l	#4,d0
+			moveq		#0,d1
+			bra.s		.endloopbyte
+.loopbyte:
+			cmpm.b	(a0)+,(a1)+
+.endloopbyte:
+			dbne		d0,.loopbyte
+.finish:
+			smi.b		d0
+			sne.b		d1
+			and.b		#1,d1
+			or.b		d1,d0
+			ext.w		d0
+			ext.l		d0
+			rts
+			
+						

@@ -1,0 +1,11 @@
+.k FILE/a
+Echo "Ik ga nu '<FILE>' compileren ..."
+;LC:LC1 -Ideut_ui/ -dDEUTSCH -oRAM: -hinclude:sys.q -r -b -cwf  <FILE>
+LC:LC1 -Ieng_ui/ -dNTSC -dENGLISH -oRAM: -hinclude:sys.q -r -b -cwf <FILE>
+
+If EXISTS RAM:<FILE>.q
+   LC:LC2 -oObj/ -v -y RAM:<FILE>  ;-s
+   Protect <FILE>.c +a
+EndIf
+
+

@@ -1,0 +1,33 @@
+				section	images,DATA_C
+
+				xdef		_IMG_pickpt,_IMG_emptypt
+				
+_IMG_pickpt:
+         	dc.l  $00000000
+
+         	dc.l  $0000FC00
+         	dc.l  $7C00FE00
+         	dc.l  $7C008600
+         	dc.l  $78008C00
+         	dc.l  $7C008600
+         	dc.l  $6E009300
+         	dc.l  $07006980
+         	dc.l  $038004C0
+         	dc.l  $01C00260
+         	dc.l  $00000140
+         	dc.l  $00000080
+         	dc.l  $00000000
+         	dc.l  $CB50CB50
+        	 	dc.l  $AA60AA60
+         	dc.l  $CA60CA60
+         	dc.l  $8B508B50
+
+         	dc.l  $00000000
+_IMG_emptypt:
+				dc.l	$00000000
+				dc.l	$00000000
+				dc.l	$00000000
+				dc.l	$00000000
+				dc.l	$00000000
+				dc.l	$00000000
+				         

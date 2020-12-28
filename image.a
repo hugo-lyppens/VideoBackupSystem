@@ -1,0 +1,10 @@
+			section		images,DATA_C
+			
+			xdef			_IMG_logim0data,_IMG_logim1data
+			
+_IMG_logim0data:
+			incbin		"art/logicon0.pic.hi2"
+
+_IMG_logim1data:
+			incbin		"art/logicon1.pic.hi2"
+

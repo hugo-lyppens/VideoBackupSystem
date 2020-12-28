@@ -1,0 +1,2 @@
+BLink LC:lib/c.o, obj/install_apl.o, obj/install_ui.o TO VBS_Install LIB LC:lib/amiga.lib LC:lib/lc.lib ND SC SD VERBOSE FANCY
+

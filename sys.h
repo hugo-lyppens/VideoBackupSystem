@@ -1,0 +1,60 @@
+#include <exec/types.h>
+#include <proto/console.h>
+#include <proto/diskfont.h>
+#include <proto/dos.h>
+#include <proto/exec.h>
+#include <proto/expansion.h>
+#include <proto/intuition.h>
+#include <proto/graphics.h>
+#include <proto/icon.h>
+#include <proto/layers.h>
+#include <proto/mathffp.h>
+#include <proto/mathieeedoubbas.h>
+#include <proto/mathieeesingbas.h>
+#include <proto/mathtrans.h>
+#include <proto/potgo.h>
+#include <proto/timer.h>
+#include <proto/translator.h>
+
+
+#include <exec/memory.h>
+#include <exec/types.h>
+#include <exec/exec.h>
+#include <exec/execbase.h>
+#include <exec/libraries.h>
+#include <exec/execbase.h>
+#include <exec/execbase.h>
+#include <graphics/clip.h>
+#include <graphics/collide.h>
+#include <graphics/copper.h>
+#include <graphics/display.h>
+#include <graphics/gels.h>
+#include <graphics/gfx.h>
+#include <graphics/gfxbase.h>
+#include <graphics/gfxmacros.h>
+#include <graphics/graphint.h>
+#include <graphics/layers.h>
+#include <graphics/rastport.h>
+#include <graphics/regions.h>
+#include <graphics/sprite.h>
+#include <graphics/text.h>
+#include <graphics/view.h>
+
+
+#include <intuition/intuitionbase.h>
+#include <intuition/intuition.h>
+#include <intuition/screens.h>
+#include <libraries/dos.h>
+#include <workbench/startup.h>
+#include <workbench/workbench.h>
+#include <ctype.h>
+
+#include <dos.h>
+#include <errno.h>
+#include <error.h>
+#include <fcntl.h>
+#include <stdarg.h>
+#include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>

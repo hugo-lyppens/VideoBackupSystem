@@ -1,0 +1,3 @@
+.k FUNC/a
+grep <FUNC> lc:include/proto/#?.h
+
