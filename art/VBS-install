@@ -1,0 +1,171 @@
+; Video Backup System install script
+; All rights reserved. No part of this may be copied, modified or reproduced
+;  in any form or by any means without the explicit written permission of
+;  Peter Korsten.
+
+(set version "V1.5")
+(set vidsys "PAL")
+
+(set defsrc (cat "VBS_Amiga." (cat version (cat "." (cat vidsys ":")))))
+
+;Check if we've booted from another disk
+(if (= (getassign "SYS" "a") defsrc)
+   (abort "Please install the VBS after a boot from harddisk. Don't run"
+          " the installation program after a boot from the VBS disk"
+          " (to avoid confusion about the FONTS: drawer).")
+)
+
+(welcome)
+
+(transcript "Logged actions for the VBS installation")
+
+(set @default-dest "Work:VBS")
+
+(transcript "Check if we're running on an NTSC system")
+
+(set vidchk "FAIL")
+
+(set vbl (database "vblank"))
+
+(if (= vidsys "PAL")
+   (if (= vbl "60")
+       (message "You are trying to install the PAL version of the VBS onto an NTSC system."
+                " The VBS will not work properly. Do you still want to install?")
+       (set vidchk "OK")
+   )
+   (if (= vbl "50")
+       (message "You are trying to install the NTSC version of the VBS onto a PAL system."
+                " The VBS will not work properly. Do you still want to install?")
+       (set vidchk "OK")
+   )
+)
+
+(if (<> vidchk "OK")
+   (if (= vbl "60")
+      (transcript "Installing the PAL VBS onto an NTSC system, asking for trouble")
+      (transcript "Installing the NTSC VBS onto a PAL system, asking for trouble")
+   )
+   (transcript "VBlank check passed")
+)
+
+(transcript "Checking OS version")
+
+(set ver (/ (getversion "exec.library" (resident)) 65536))
+(if (< ver 37)
+   (message "VBS will only run with Release 2 of the Operating System onward (version 36 or higher).\n"
+            " VBS will NOT run with your current version of the OS. Do you still want to install?")
+)
+
+(if (< ver 37)
+   (transcript "OS version below Release 2 - installing anyway")
+   (transcript "OS version Release 2 or higher")
+)
+
+(set oldvbs "")
+
+(transcript "Checking for an existing version of the VBS")
+
+(set putvbs 3)
+(set oldvbs (getassign "VBS"))
+(if (<> oldvbs "")
+   (set putvbs
+      (askchoice
+         (prompt "There seems to be another version of the VBS installed in " oldvbs ".")
+         (choices (cat "Install into " (cat oldvbs ", remove other version."))
+                  (cat "Install into " (cat oldvbs ", save other version."))
+                  ("Install into a new directory.")
+         )
+         (default 1)
+         (help @askchoice-help)
+      )
+   )
+)
+
+(transcript "Asking for what directory to put the other version of the VBS into")
+
+(if (= putvbs 1)
+   ((set olddir
+      (askdir
+         (prompt "Specify the directory where you want the other version of the VBS saved.")
+         (help @askdir-help)
+         (default "Work:VBS_old")
+      ))
+   (copyfiles
+      (source "VBS:")
+      (dest olddir)
+      (all)
+   ))
+)
+
+(transcript "Asking for what directory to put the VBS into")
+
+(if (OR (= putvbs 0) (= putvbs 1))
+   (set vbsdir oldvbs)
+)
+
+(if (= putvbs 2)
+   (set vbsdir
+      (askdir
+         (prompt "Specify the directory where you want the Video Backup System installed.")
+         (default "Work:VBS_new")
+         (help @askdir-help)
+      )
+   )
+)
+
+(if (= putvbs 3)
+   (set vbsdir
+      (askdir
+         (prompt "Specify the directory where you want the Video Backup System installed.")
+         (default "Work:VBS")
+         (help @askdir-help)
+      )
+   )
+)
+
+(transcript (cat "The VBS will be installed in " vbsdir))
+
+(set @default-dest vbsdir)
+
+(transcript "Copying the required files")
+
+(copyfiles
+   (prompt "The required files will be copied to " vbsdir ".")
+   (help @copyfiles-help)
+   (source defsrc)
+   (dest vbsdir)
+   (choices "VBS" "Reports" "LogFiles")
+   (infos)
+   (files)
+   (confirm)
+)
+
+(transcript "Copy the melba.font into the FONTS: drawer")
+
+(copyfiles
+   (prompt "The VBS needs certain fonts copied into your FONTS: drawer.")
+   (help @copyfiles-help)
+   (source (tackon defsrc "Fonts"))
+   (dest "FONTS:")
+   (pattern "melba#?")
+   (confirm)
+)
+
+(transcript "Ask for permission to alter the \"S:User-Startup\" file")
+
+(startup "VBS"
+   (prompt "Some changes need to be made to the \"S:User-Startup\" file so that your system"
+           " will be properly configured to use the VBS.")
+   (help @startup-help)
+   (command (cat "Assign VBS: " vbsdir))
+)
+
+(transcript "\"S:User-Startup\" was altered")
+
+(transcript "Setting up \"VBS:\" assign if not already assigned")
+
+(if (OR (= putvbs 2) (= putvbs 3))
+   (makeassign "VBS" vbsdir)
+)
+
+(transcript "Installation complete")
